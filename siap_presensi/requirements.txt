@@ -1,0 +1,29 @@
+# Dependensi Utama SIAP Desktop Tahap 1
+# Kompatibel dengan Python 3.10, 3.11, 3.12+
+
+# GUI Framework Desktop
+PySide6>=6.6.0,<6.9.0
+
+# Database ORM & Migrasi
+SQLAlchemy>=2.0.25,<2.1.0
+alembic>=1.13.1,<1.15.0
+
+# Keamanan & Password Hashing
+bcrypt>=4.1.2,<4.3.0
+passlib>=1.7.4
+
+# Variabel Lingkungan
+python-dotenv>=1.0.1
+
+# Pengolahan Data (Disiapkan untuk Tahap 2: Import Absensi Excel)
+pandas>=2.2.0
+openpyxl>=3.1.2
+
+# Generator Laporan (Disiapkan untuk Tahap Laporan PDF)
+reportlab>=4.1.0
+
+# Packaging Windows Standalone EXE
+pyinstaller>=6.4.0
+
+# Testing
+pytest>=8.0.0
