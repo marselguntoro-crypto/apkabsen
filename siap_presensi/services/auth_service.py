@@ -118,6 +118,9 @@ class AuthService:
     Layanan operasional autentikasi, verifikasi kredensial, dan pencatatan audit.
     """
 
+    hash_password = staticmethod(hash_password)
+    verify_password = staticmethod(verify_password)
+
     @staticmethod
     def authenticate(username: str, password: str) -> Tuple[bool, Optional[User], Optional[str]]:
         """

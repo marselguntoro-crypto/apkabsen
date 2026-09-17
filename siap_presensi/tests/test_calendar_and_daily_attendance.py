@@ -58,11 +58,20 @@ class TestCalendarAndDailyAttendanceTahap4(unittest.TestCase):
         self.test_db_path = Path(self.temp_dir.name) / "test_tahap4.db"
         self.engine = create_engine(f"sqlite:///{self.test_db_path.as_posix()}", echo=False)
         Base.metadata.create_all(bind=self.engine)
-        self.Session = sessionmaker(bind=self.engine)
+        from sqlalchemy.orm import Session as SqlASession
+        class AutoCommitSession(SqlASession):
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                if exc_type is None:
+                    try:
+                        self.commit()
+                    except Exception:
+                        self.rollback()
+                        raise
+                else:
+                    self.rollback()
+                return super().__exit__(exc_type, exc_val, exc_tb)
 
-        # Patch get_db_session agar semua service menggunakan test database ini
-        self.patcher = patch("database.connection.get_db_session")
-        self.mock_get_db_session = self.patcher.start()
+        self.Session = sessionmaker(bind=self.engine, class_=AutoCommitSession)
 
         from contextlib import contextmanager
         @contextmanager
@@ -77,7 +86,15 @@ class TestCalendarAndDailyAttendanceTahap4(unittest.TestCase):
             finally:
                 session.close()
 
-        self.mock_get_db_session.side_effect = _mock_session
+        self.patchers = [
+            patch("database.connection.get_db_session", side_effect=_mock_session),
+            patch("database.connection.SessionLocal", self.Session),
+            patch("services.calendar_service.get_db_session", side_effect=_mock_session),
+            patch("services.attendance_daily_service.get_db_session", side_effect=_mock_session),
+            patch("services.settings_service.get_db_session", side_effect=_mock_session),
+        ]
+        for p in self.patchers:
+            p.start()
 
         # Seed data awal: Settings dan Karyawan Master
         with _mock_session() as s:
@@ -136,7 +153,8 @@ class TestCalendarAndDailyAttendanceTahap4(unittest.TestCase):
             s.add_all([self.emp1, self.emp2, self.emp3, self.emp_nonaktif])
 
     def tearDown(self):
-        self.patcher.stop()
+        for p in self.patchers:
+            p.stop()
         self.temp_dir.cleanup()
 
     def test_01_generate_monthly_calendar(self):

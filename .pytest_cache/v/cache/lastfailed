@@ -1,0 +1,3 @@
+{
+  "siap_presensi/tests/test_phase6_deployment.py::TestPhase6Deployment::test_02_database_initializer_clean_and_idempotent": true
+}

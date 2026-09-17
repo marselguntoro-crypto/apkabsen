@@ -1,6 +1,6 @@
 {
   "name": "SIAP - Presensi Desktop",
-  "description": "Sistem Informasi Administrasi Presensi - Aplikasi Desktop Windows Berbasis PySide6 & SQLite (Tahap 4: Kalender Kerja & Pembentukan Absensi Harian)",
+  "description": "Sistem Informasi Administrasi Presensi - Aplikasi Desktop Windows Berbasis PySide6 & SQLite (Tahap 5: Mesin Perhitungan Potongan Absensi, Rekapitulasi & Export)",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

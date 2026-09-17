@@ -22,6 +22,7 @@ from config.settings import (
     APP_NAME,
     APP_FULL_NAME,
     APP_VERSION,
+    ASSETS_DIR,
     ensure_directories,
 )
 from database.connection import init_db
@@ -78,14 +79,11 @@ class ApplicationController:
         self.main_window.logout_signal.connect(self.show_login_window)
         self.main_window.show()
 
-        # Peringatan keamanan jika akun admin masih memakai password default
+        # Dialog setup awal jika akun admin masih memakai password default
         if AuthService.is_initial_admin_password(user):
-            QMessageBox.information(
-                self.main_window,
-                "Peringatan Keamanan",
-                "Perhatian: Akun Administrator saat ini masih menggunakan kata sandi bawaan awal "
-                "(Admin@SIAP2025).\nDisarankan untuk mengganti kata sandi demi keamanan operasional."
-            )
+            from ui.dialogs.first_run_dialog import FirstRunSetupDialog
+            setup_dlg = FirstRunSetupDialog(user=user, parent=self.main_window)
+            setup_dlg.exec()
 
     def show_login_window(self):
         """Menampilkan kembali dialog login setelah logout."""
@@ -124,6 +122,14 @@ def main():
     font = QFont("Segoe UI", 10)
     font.setStyleHint(QFont.SansSerif)
     app.setFont(font)
+
+    # Terapkan Icon Aplikasi
+    icon_png = ASSETS_DIR / "icons" / "SIAP.png"
+    icon_ico = ASSETS_DIR / "icons" / "SIAP.ico"
+    if icon_png.exists():
+        app.setWindowIcon(QIcon(str(icon_png)))
+    elif icon_ico.exists():
+        app.setWindowIcon(QIcon(str(icon_ico)))
 
     # Jalankan Controller
     controller = ApplicationController()

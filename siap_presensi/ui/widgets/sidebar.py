@@ -24,6 +24,7 @@ class Sidebar(QFrame):
 
     menu_selected = Signal(int, str)  # (page_index, menu_key)
     logout_requested = Signal()
+    about_requested = Signal()
 
     def __init__(self, user_role: UserRole = UserRole.ADMIN, parent=None):
         super().__init__(parent)
@@ -113,6 +114,29 @@ class Sidebar(QFrame):
         sep2.setFrameShape(QFrame.HLine)
         sep2.setStyleSheet(f"background-color: {THEME['NAVY_LIGHT']}; height: 1px; margin: 8px 0;")
         layout.addWidget(sep2)
+
+        # Tombol Tentang Aplikasi
+        about_btn = QPushButton("  ℹ️  Tentang SIAP")
+        about_btn.setCursor(Qt.PointingHandCursor)
+        about_btn.setFixedHeight(36)
+        about_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                color: #94a3b8;
+                font-size: 12px;
+                font-weight: 500;
+                text-align: left;
+                padding-left: 12px;
+                border-radius: 6px;
+                border: none;
+            }}
+            QPushButton:hover {{
+                background-color: {THEME['NAVY_LIGHT']};
+                color: #ffffff;
+            }}
+        """)
+        about_btn.clicked.connect(self.about_requested.emit)
+        layout.addWidget(about_btn)
 
         # Tombol Logout
         logout_btn = QPushButton("  🚪  Keluar (Logout)")

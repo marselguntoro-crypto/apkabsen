@@ -18,7 +18,19 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QMessageBox,
 )
-from config.settings import THEME
+from config.settings import (
+    THEME,
+    APP_NAME,
+    APP_FULL_NAME,
+    APP_VERSION,
+    DB_VERSION,
+    APP_DEVELOPER,
+    DATA_DIR,
+    DB_PATH,
+    BACKUP_DIR,
+    LOGS_DIR,
+    EXPORTS_DIR,
+)
 from services.auth_service import CurrentSession
 from services.settings_service import SettingsService
 
@@ -149,7 +161,53 @@ class SettingsPage(QWidget):
         section_potongan.layout().addLayout(potongan_grid)
         layout.addWidget(section_potongan)
 
-        # 5. Tombol Aksi (Simpan, Reset Form, Muat Pengaturan, Default Pabrik)
+        # 5. Section: Informasi Sistem & Direktori Runtime
+        section_info = self._create_card("ℹ️  Informasi Sistem & Direktori Pengguna (Windows)")
+        info_grid = QGridLayout()
+        info_grid.setSpacing(10)
+
+        info_items = [
+            ("Aplikasi & Versi:", f"{APP_NAME} - {APP_FULL_NAME} (v{APP_VERSION}, DB v{DB_VERSION})"),
+            ("Pengembang:", APP_DEVELOPER),
+            ("Database Aktif:", str(DB_PATH)),
+            ("Folder Cadangan (Backup):", str(BACKUP_DIR)),
+            ("Folder Berkas Log:", str(LOGS_DIR)),
+            ("Folder Ekspor Laporan:", str(EXPORTS_DIR)),
+        ]
+
+        for r_idx, (k, v) in enumerate(info_items):
+            k_lbl = QLabel(k)
+            k_lbl.setStyleSheet("font-weight: 600; font-size: 12px; color: #475569;")
+            v_lbl = QLabel(v)
+            v_lbl.setWordWrap(True)
+            v_lbl.setStyleSheet("font-size: 12px; color: #0f172a;")
+            info_grid.addWidget(k_lbl, r_idx, 0)
+            info_grid.addWidget(v_lbl, r_idx, 1)
+
+        about_btn = QPushButton("📖  Buka Dialog Tentang SIAP (Spesifikasi Lengkap)")
+        about_btn.setCursor(Qt.PointingHandCursor)
+        about_btn.setFixedHeight(34)
+        about_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #f1f5f9;
+                color: {THEME['NAVY_DARK']};
+                border: 1px solid {THEME['BORDER']};
+                border-radius: 6px;
+                padding: 0 16px;
+                font-weight: 600;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: #e2e8f0;
+            }}
+        """)
+        about_btn.clicked.connect(self._open_about_dialog)
+        info_grid.addWidget(about_btn, len(info_items), 0, 1, 2)
+
+        section_info.layout().addLayout(info_grid)
+        layout.addWidget(section_info)
+
+        # 6. Tombol Aksi (Simpan, Reset Form, Muat Pengaturan, Default Pabrik)
         btn_bar = QHBoxLayout()
         btn_bar.setSpacing(12)
 
@@ -315,3 +373,10 @@ class SettingsPage(QWidget):
                 self.load_settings()
             else:
                 QMessageBox.critical(self, "Gagal", f"Gagal me-reset pengaturan: {', '.join(errors)}")
+
+    def _open_about_dialog(self):
+        """Membuka dialog Tentang SIAP."""
+        from ui.dialogs.about_dialog import AboutDialog
+        dlg = AboutDialog(self)
+        dlg.exec()
+

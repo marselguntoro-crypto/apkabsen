@@ -53,17 +53,13 @@ def get_db_session() -> Generator[Session, None, None]:
         session.close()
 
 
-def init_db():
+def init_db() -> dict:
     """
-    Inisialisasi direktori dan tabel database.
-    Mengeksekusi pembuatan tabel jika belum ada, serta melakukan seed data awal.
+    Inisialisasi direktori dan tabel database melalui DatabaseInitializer.
+    Mengeksekusi pembuatan tabel jika belum ada, backup pra-migrasi, migrasi, dan seed data awal.
     """
-    ensure_directories()
-    # Buat seluruh tabel sesuai metadata
-    Base.metadata.create_all(bind=engine)
-    # Jalankan migrasi tambahan skema jika diperlukan
-    from .migration_runner import run_phase4_migrations
-    run_phase4_migrations(engine)
-    # Lakukan seed data awal jika tabel user masih kosong
-    from .seed import seed_initial_data
-    seed_initial_data()
+    from .initializer import DatabaseInitializer
+    res = DatabaseInitializer.initialize(engine)
+    if not res.get("success"):
+        raise RuntimeError(res.get("error", "Database initialization failed"))
+    return res

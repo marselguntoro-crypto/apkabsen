@@ -1,0 +1,12 @@
+# ==============================================================================
+# SIAP (Sistem Informasi Administrasi Presensi) - Development & Testing
+# ==============================================================================
+
+-r requirements.txt
+
+# Pengujian Unit & QA
+pytest>=8.0.0
+pytest-cov>=4.1.0
+
+# Asset / Icon Generation
+Pillow>=9.4.0

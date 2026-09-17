@@ -25,13 +25,45 @@ if env_path.exists():
 APP_NAME = os.getenv("APP_NAME", "SIAP")
 APP_FULL_NAME = os.getenv("APP_FULL_NAME", "Sistem Informasi Administrasi Presensi")
 APP_SUBTITLE = os.getenv("APP_SUBTITLE", "Sistem Pengelolaan Absensi dan Potongan Karyawan")
-APP_VERSION = os.getenv("APP_VERSION", "1.0.0 (Tahap 1)")
+APP_VERSION = os.getenv("APP_VERSION", "1.0.0")
+DB_VERSION = "1.0.0"
+APP_YEAR = "2026"
+APP_DEVELOPER = "Tim Pengembang SIAP"
+APP_ORGANIZATION = "Universitas / Instansi Pengguna"
+APP_LICENSE = "Proprietary / Hak Cipta Dilindungi"
 
-# Struktur Direktori Runtime Lokal (Aman untuk Windows non-admin)
-DATA_DIR = BASE_DIR / "data"
+
+def get_user_data_dir() -> Path:
+    """
+    Menentukan lokasi folder data pengguna yang sesuai untuk Windows & runtime produksi.
+    Memisahkan binary instalasi (Program Files) dari data mutable pengguna:
+    1. SIAP_DATA_DIR (Environment variable override jika disetel)
+    2. Portable Mode: SIAP_PORTABLE_MODE=1 atau file siap_portable.flag di BASE_DIR
+    3. Windows OS atau mode frozen PyInstaller: %LOCALAPPDATA%\\SIAP
+    4. Default dev fallback: BASE_DIR / "data"
+    """
+    if os.getenv("SIAP_DATA_DIR"):
+        return Path(os.getenv("SIAP_DATA_DIR")).resolve()
+
+    if os.getenv("SIAP_PORTABLE_MODE") == "1" or (BASE_DIR / "siap_portable.flag").exists():
+        return BASE_DIR / "data"
+
+    if sys.platform == "win32" or getattr(sys, "frozen", False) or os.getenv("LOCALAPPDATA"):
+        local_app_data = os.getenv("LOCALAPPDATA")
+        if local_app_data:
+            return Path(local_app_data) / "SIAP"
+        return Path.home() / "AppData" / "Local" / "SIAP"
+
+    return BASE_DIR / "data"
+
+
+# Struktur Direktori Runtime (Terpisah & Aman untuk Windows non-admin)
+DATA_DIR = get_user_data_dir()
 DB_DIR = DATA_DIR / "database"
 BACKUP_DIR = DATA_DIR / "backups"
 LOGS_DIR = DATA_DIR / "logs"
+EXPORTS_DIR = DATA_DIR / "exports"
+CONFIG_DIR = DATA_DIR / "config"
 ASSETS_DIR = BASE_DIR / "assets"
 
 # Konfigurasi Database SQLite
@@ -141,8 +173,24 @@ THEME = {
 }
 
 
-def ensure_directories():
-    """Memastikan semua folder penting aplikasi tersedia otomatis."""
-    directories = [DATA_DIR, DB_DIR, BACKUP_DIR, LOGS_DIR, ASSETS_DIR]
-    for directory in directories:
-        directory.mkdir(parents=True, exist_ok=True)
+def ensure_directories() -> dict:
+    """
+    Memastikan semua folder penting aplikasi tersedia otomatis:
+    database, logs, backups, exports, config, dan assets.
+    Mengembalikan dictionary jalur direktori yang telah dipastikan.
+    """
+    directories = {
+        "data": DATA_DIR,
+        "database": DB_DIR,
+        "backups": BACKUP_DIR,
+        "logs": LOGS_DIR,
+        "exports": EXPORTS_DIR,
+        "config": CONFIG_DIR,
+        "assets": ASSETS_DIR,
+    }
+    for name, directory in directories.items():
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            print(f"[ERROR] Gagal membuat direktori {name} di {directory}: {e}", file=sys.stderr)
+    return directories

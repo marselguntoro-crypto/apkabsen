@@ -6,9 +6,10 @@ Mengorkestrasi pembentukan data absensi harian (attendance_daily) dengan memaduk
 3. Data Transaksi Scan Mentah (attendance_raw)
 """
 from datetime import date, datetime
+import calendar as py_calendar
 from typing import Dict, List, Optional, Tuple, Any, Set
 
-from sqlalchemy import and_, or_, func, desc
+from sqlalchemy import and_, or_, func, desc, extract
 from sqlalchemy.orm import Session, joinedload
 
 from database.connection import get_db_session
@@ -96,12 +97,15 @@ class AttendanceDailyService:
                     "message": "Tidak ditemukan data karyawan aktif untuk diproses.",
                 }
 
+            start_date = date(year, month, 1)
+            end_date = date(year, month, py_calendar.monthrange(year, month)[1])
+
             # 3. Ambil seluruh transaksi attendance_raw pada periode bulan & tahun ini
             raw_records: List[AttendanceRaw] = (
                 session.query(AttendanceRaw)
                 .filter(
-                    extract("year", AttendanceRaw.tanggal) == year,
-                    extract("month", AttendanceRaw.tanggal) == month,
+                    AttendanceRaw.tanggal >= start_date,
+                    AttendanceRaw.tanggal <= end_date,
                 )
                 .all()
             )
@@ -149,8 +153,8 @@ class AttendanceDailyService:
             existing_daily = (
                 session.query(AttendanceDaily)
                 .filter(
-                    extract("year", AttendanceDaily.attendance_date) == year,
-                    extract("month", AttendanceDaily.attendance_date) == month,
+                    AttendanceDaily.attendance_date >= start_date,
+                    AttendanceDaily.attendance_date <= end_date,
                 )
                 .all()
             )
@@ -233,6 +237,10 @@ class AttendanceDailyService:
                         if len(scan_out_list) > 1:
                             has_conflict = True  # Beberapa scan pulang terdeteksi
 
+                    # Format ke string HH:MM untuk database String(10)
+                    actual_in_str = actual_in.strftime("%H:%M") if actual_in else None
+                    actual_out_str = actual_out.strftime("%H:%M") if actual_out else None
+
                     # 3. Status Kehadiran
                     check_in_st = CheckScanStatus.ADA if actual_in else CheckScanStatus.TIDAK_ADA
                     check_out_st = CheckScanStatus.ADA if actual_out else CheckScanStatus.TIDAK_ADA
@@ -268,8 +276,8 @@ class AttendanceDailyService:
                         existing_record.day_name = cal.day_name
                         existing_record.scheduled_check_in = cal.scheduled_check_in
                         existing_record.scheduled_check_out = cal.scheduled_check_out
-                        existing_record.actual_check_in = actual_in
-                        existing_record.actual_check_out = actual_out
+                        existing_record.actual_check_in = actual_in_str
+                        existing_record.actual_check_out = actual_out_str
                         existing_record.check_in_status = check_in_st.value
                         existing_record.check_out_status = check_out_st.value
                         existing_record.attendance_status = att_status.value
@@ -289,8 +297,8 @@ class AttendanceDailyService:
                             day_name=cal.day_name,
                             scheduled_check_in=cal.scheduled_check_in,
                             scheduled_check_out=cal.scheduled_check_out,
-                            actual_check_in=actual_in,
-                            actual_check_out=actual_out,
+                            actual_check_in=actual_in_str,
+                            actual_check_out=actual_out_str,
                             check_in_status=check_in_st.value,
                             check_out_status=check_out_st.value,
                             attendance_status=att_status.value,
@@ -370,13 +378,16 @@ class AttendanceDailyService:
         """
         Mengambil daftar absensi harian dengan filter multi-kriteria, pencarian, dan pagination.
         """
+        start_date = date(year, month, 1)
+        end_date = date(year, month, py_calendar.monthrange(year, month)[1])
+
         with get_db_session() as session:
             query = (
                 session.query(AttendanceDaily)
                 .join(Employee, AttendanceDaily.employee_id == Employee.id)
                 .filter(
-                    extract("year", AttendanceDaily.attendance_date) == year,
-                    extract("month", AttendanceDaily.attendance_date) == month,
+                    AttendanceDaily.attendance_date >= start_date,
+                    AttendanceDaily.attendance_date <= end_date,
                 )
             )
 
@@ -470,13 +481,16 @@ class AttendanceDailyService:
                 .count()
             )
 
+            start_date = date(year, month, 1)
+            end_date = date(year, month, py_calendar.monthrange(year, month)[1])
+
             # 2. Query absensi harian
             query = (
                 session.query(AttendanceDaily)
                 .join(Employee, AttendanceDaily.employee_id == Employee.id)
                 .filter(
-                    extract("year", AttendanceDaily.attendance_date) == year,
-                    extract("month", AttendanceDaily.attendance_date) == month,
+                    AttendanceDaily.attendance_date >= start_date,
+                    AttendanceDaily.attendance_date <= end_date,
                 )
             )
 

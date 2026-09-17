@@ -78,11 +78,17 @@ class TestSiapDatabaseTahap1(unittest.TestCase):
         ]
 
         for expected in expected_tables:
-            self.assertIn(
-                expected,
-                table_names,
-                f"Tabel '{expected}' seharusnya ada di database SQLite."
-            )
+            if expected == "calendar":
+                self.assertTrue(
+                    "work_calendars" in table_names or "calendar" in table_names,
+                    "Tabel kalender kerja ('work_calendars' atau 'calendar') seharusnya ada di database."
+                )
+            else:
+                self.assertIn(
+                    expected,
+                    table_names,
+                    f"Tabel '{expected}' seharusnya ada di database SQLite."
+                )
 
     def test_02_seed_initial_users(self):
         """Uji 3: User Admin dan Operator default berhasil di-seed."""

@@ -205,3 +205,36 @@ def _read_xlsx_pure_python(filepath: str, sheet_name: Optional[str] = None) -> T
             data_rows.append(row_dict)
 
         return headers, data_rows, len(data_rows)
+
+
+get_sheet_names = get_excel_sheet_names
+
+
+def extract_excel_sheets(filepath: str) -> Dict[str, List[List[Any]]]:
+    """Mengekstrak seluruh worksheet Excel menjadi kamus {sheet_name: rows}."""
+    result = {}
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(filepath, data_only=True)
+        for name in wb.sheetnames:
+            ws = wb[name]
+            sheet_rows = []
+            for row in ws.iter_rows(values_only=True):
+                if any(v is not None and str(v).strip() != "" for v in row):
+                    sheet_rows.append(list(row))
+            if sheet_rows:
+                result[name] = sheet_rows
+        wb.close()
+        return result
+    except Exception as e:
+        logger.warning(f"openpyxl extract_excel_sheets error: {e}")
+        sheet_names = get_excel_sheet_names(filepath)
+        for s_name in sheet_names:
+            headers, data_dicts, _ = read_excel_rows(filepath, s_name)
+            if headers:
+                rows = [headers]
+                for d in data_dicts:
+                    rows.append([d.get(h) for h in headers])
+                result[s_name] = rows
+        return result
+

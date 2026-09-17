@@ -116,3 +116,13 @@ def format_date_indonesian(dt: Optional[date]) -> str:
         "Juli", "Agustus", "September", "Oktober", "November", "Desember"
     ]
     return f"{dt.day:02d} {bulan_indo[dt.month]} {dt.year}"
+
+
+def parse_flexible_date(val: Union[str, int, float, date, datetime, None]) -> Optional[date]:
+    """Alias untuk parse_date_value yang langsung mengembalikan Optional[date]."""
+    d, _ = parse_date_value(val)
+    return d
+
+
+format_indonesian_date = format_date_indonesian
+

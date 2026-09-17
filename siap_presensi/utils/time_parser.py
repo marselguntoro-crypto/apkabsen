@@ -80,3 +80,16 @@ def format_time_display(val: Optional[str]) -> str:
     if not val or val == "-":
         return "-"
     return val
+
+
+def parse_time_str(val: Union[str, time, datetime, None]) -> Optional[time]:
+    """Mengembalikan objek datetime.time dari string HH:MM / HH:MM:SS atau None jika kosong/invalid."""
+    formatted_str, is_empty, err = parse_time_value(val)
+    if is_empty or not formatted_str:
+        return None
+    try:
+        parts = formatted_str.split(":")
+        return time(int(parts[0]), int(parts[1]), int(parts[2]))
+    except Exception:
+        return None
+

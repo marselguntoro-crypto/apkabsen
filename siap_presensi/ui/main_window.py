@@ -25,6 +25,7 @@ from ui.import_module_page import ImportModulePage
 from ui.raw_attendance_page import RawAttendancePage
 from ui.attendance_hub_page import AttendanceHubPage
 from ui.calendar_page import CalendarPage
+from ui.deduction_page import DeductionPage
 from ui.settings_page import SettingsPage
 from ui.backup_page import BackupPage
 from ui.placeholder_page import PlaceholderPage
@@ -57,6 +58,7 @@ class MainWindow(QMainWindow):
         self.sidebar = Sidebar(user_role=self.user.role, parent=self)
         self.sidebar.menu_selected.connect(self._on_navigation)
         self.sidebar.logout_requested.connect(self._on_logout_requested)
+        self.sidebar.about_requested.connect(self._show_about_dialog)
         root_layout.addWidget(self.sidebar)
 
         # 2. Area Konten Kanan: Header Atas + Stacked Pages
@@ -79,10 +81,7 @@ class MainWindow(QMainWindow):
         self.page_import = ImportModulePage(self, user=self.user)
         self.page_absensi = AttendanceHubPage(self, user=self.user)
         self.page_kalender = CalendarPage(self, user=self.user)
-        self.page_laporan = PlaceholderPage(
-            "Laporan & Rekapitulasi",
-            "Modul pencetakan dokumen PDF rekap presensi bulanan dan potongan slip gaji karyawan akan disiapkan pada Tahap 5."
-        )
+        self.page_potongan = DeductionPage(self, user=self.user)
         self.page_settings = SettingsPage(self)
         self.page_backup = BackupPage(self)
 
@@ -92,7 +91,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.page_import)      # Index 2
         self.stack.addWidget(self.page_absensi)     # Index 3
         self.stack.addWidget(self.page_kalender)    # Index 4
-        self.stack.addWidget(self.page_laporan)     # Index 5
+        self.stack.addWidget(self.page_potongan)    # Index 5
         self.stack.addWidget(self.page_settings)    # Index 6
         self.stack.addWidget(self.page_backup)      # Index 7
 
@@ -153,8 +152,35 @@ class MainWindow(QMainWindow):
         """)
         user_info_box.addWidget(name_lbl)
 
+        # Tombol Tentang Aplikasi
+        about_btn = QPushButton("ℹ️ Tentang")
+        about_btn.setCursor(Qt.PointingHandCursor)
+        about_btn.setFixedHeight(30)
+        about_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #f1f5f9;
+                color: {THEME['NAVY_DARK']};
+                border: 1px solid {THEME['BORDER']};
+                border-radius: 4px;
+                padding: 0 10px;
+                font-size: 11px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: #e2e8f0;
+            }}
+        """)
+        about_btn.clicked.connect(self._show_about_dialog)
+        user_info_box.addWidget(about_btn)
+
         h_layout.addLayout(user_info_box)
         return header
+
+    def _show_about_dialog(self):
+        """Menampilkan dialog informasi Tentang Aplikasi SIAP."""
+        from ui.dialogs.about_dialog import AboutDialog
+        dlg = AboutDialog(self)
+        dlg.exec()
 
     def _on_navigation(self, page_index: int, menu_key: str):
         """Menangani perpindahan halaman antar menu."""
@@ -188,6 +214,8 @@ class MainWindow(QMainWindow):
                 self.page_absensi.page_raw.refresh_data()
         elif page_index == 4:
             self.page_kalender.refresh_calendar()
+        elif page_index == 5:
+            self.page_potongan.refresh_all()
 
     def _on_logout_requested(self):
         """Konfirmasi logout pengguna."""
