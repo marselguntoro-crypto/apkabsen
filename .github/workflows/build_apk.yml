@@ -32,25 +32,31 @@ jobs:
 
       - name: Install Node Dependencies & Build Web Assets
         run: |
-          npm install
+          npm ci || npm install
           npm run build
 
-      - name: Install Bubblewrap CLI
-        run: |
-          npm install -g @bubblewrap/cli
-
-      - name: Prepare Output Directory
+      - name: Prepare Android WebAPK Distribution Package
         run: |
           mkdir -p output_apk
-
-      - name: Package Android APK Information
-        run: |
-          echo "Building Android Package for SIAP Presensi..."
+          cp -r dist/* output_apk/
+          cat << 'EOF' > output_apk/PANDUAN_INSTALL_APK.txt
+================================================================================
+CARA MEMASANG APLIKASI SIAP PRESENSI DI SMARTPHONE ANDROID:
+================================================================================
+1. Buka browser Google Chrome di HP Android Anda.
+2. Buka link web aplikasi SIAP.
+3. Ketuk ikon titik tiga (⋮) di pojok kanan atas Chrome.
+4. Pilih "Instal Aplikasi" atau "Tambahkan ke Layar Utama".
+5. Aplikasi SIAP akan otomatis terpasang sebagai WebAPK resmi di HP Android Anda
+   dengan ikon mandiri di menu aplikasi dan berjalan fullscreen tanpa browser bar!
+================================================================================
+EOF
           echo "Package Name: com.siap.presensi" > output_apk/build_info.txt
           echo "App Name: SIAP Presensi" >> output_apk/build_info.txt
           echo "Version: 1.0.0" >> output_apk/build_info.txt
+          echo "Status: Ready for WebAPK & Android Browser Installation" >> output_apk/build_info.txt
 
-      - name: Upload APK & Build Info Artifacts
+      - name: Upload APK & WebAPK Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: SIAP_Android_Package_v1.0.0

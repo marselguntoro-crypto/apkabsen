@@ -45,8 +45,11 @@ VersionInfoDescription={#MyAppFullName} Setup
 VersionInfoCopyright=Copyright (C) 2026 {#MyAppPublisher}
 
 [Languages]
-Name: "indonesian"; MessagesFile: "compiler:Languages\Indonesian.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[CustomMessages]
+english.CreateDesktopIcon=Buat ikon di &Desktop
+english.AdditionalIcons=Ikon Tambahan:
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked

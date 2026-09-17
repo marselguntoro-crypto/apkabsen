@@ -40,14 +40,14 @@ jobs:
           pyinstaller --clean SIAP.spec
 
       - name: Install Inno Setup
-        uses: chride/innosetup-action@v1.0.1
-        with:
-          version: '6.2.2'
+        run: |
+          choco install innosetup --yes --no-progress
+          echo "C:\Program Files (x86)\Inno Setup 6" >> $env:GITHUB_PATH
 
       - name: Compile Inno Setup Installer
         run: |
           cd siap_presensi
-          iscc installer/SIAP_Setup.iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer/SIAP_Setup.iss
 
       - name: Upload Standalone Executable Artifact
         uses: actions/upload-artifact@v4
