@@ -19,7 +19,9 @@ import {
   KeyRound,
   Lock,
   User as UserIcon,
-  Monitor
+  Monitor,
+  PackageCheck,
+  Smartphone
 } from 'lucide-react';
 import { 
   UserRole, 
@@ -31,13 +33,19 @@ import {
   ImportBatchLogItem, 
   EmployeeItem,
   WorkCalendarItem,
-  DailyAttendanceItem
+  DailyAttendanceItem,
+  AttendanceDeductionItem
 } from '../types';
 import { EmployeesSimulatorView } from './EmployeesSimulatorView';
 import { ImportAttendanceSimulatorView } from './ImportAttendanceSimulatorView';
 import { RawAttendanceSimulatorView } from './RawAttendanceSimulatorView';
 import { CalendarSimulatorView } from './CalendarSimulatorView';
 import { DailyAttendanceSimulatorView } from './DailyAttendanceSimulatorView';
+import { DeductionSimulatorView } from './DeductionSimulatorView';
+import { BuildDeploymentSimulatorView } from './BuildDeploymentSimulatorView';
+import { AboutDialogModal } from './AboutDialogModal';
+import { FirstRunDialogModal } from './FirstRunDialogModal';
+import InstallAppModal from './InstallAppModal';
 
 export default function DesktopSimulator() {
   // Authentication State
@@ -45,6 +53,11 @@ export default function DesktopSimulator() {
   const [loginUsername, setLoginUsername] = useState('admin');
   const [loginPassword, setLoginPassword] = useState('Admin@SIAP2025');
   const [loginError, setLoginError] = useState('');
+
+  // Modals Tahap 6 & PWA
+  const [showAboutDialog, setShowAboutDialog] = useState<boolean>(false);
+  const [showFirstRunDialog, setShowFirstRunDialog] = useState<boolean>(false);
+  const [showInstallModal, setShowInstallModal] = useState<boolean>(false);
 
   // Navigation State
   const [activeMenu, setActiveMenu] = useState<string>('dashboard');
@@ -360,6 +373,126 @@ export default function DesktopSimulator() {
     },
   ]);
 
+  // Deductions State (Tahap 5)
+  const [deductionsList, setDeductionsList] = useState<AttendanceDeductionItem[]>([
+    {
+      id: 1,
+      daily_attendance_id: 120260803,
+      employee_id: 1,
+      emp_num: '1',
+      no_id: '1',
+      nik: '3201010001',
+      nama: 'AHMAD FAUZI',
+      unit: 'Teknologi Informasi (TI)',
+      jabatan: 'Senior Software Engineer',
+      attendance_date: '2026-08-03',
+      day_name: 'Senin',
+      scheduled_check_in: '08:15',
+      scheduled_check_out: '16:30',
+      actual_check_in: '08:35',
+      actual_check_out: '16:30',
+      attendance_status: 'HADIR_LENGKAP',
+      is_working_day: true,
+      late_minutes: 20,
+      early_leave_minutes: 0,
+      deduction_late: 7500,
+      deduction_early_leave: 0,
+      deduction_missing_check_in: 0,
+      deduction_missing_check_out: 0,
+      total_deduction: 7500,
+      calculation_version: '5.0.0',
+      calculated_at: '2026-08-03 17:00:00',
+      notes: 'Terlambat 20 mnt (Rp7.500). Pulang tepat waktu.',
+    },
+    {
+      id: 2,
+      daily_attendance_id: 220260803,
+      employee_id: 2,
+      emp_num: '2',
+      no_id: '2',
+      nik: '3201010002',
+      nama: 'BUDI SANTOSO',
+      unit: 'Keuangan',
+      jabatan: 'Staff Akuntansi',
+      attendance_date: '2026-08-03',
+      day_name: 'Senin',
+      scheduled_check_in: '08:15',
+      scheduled_check_out: '16:30',
+      actual_check_in: '08:02',
+      actual_check_out: null,
+      attendance_status: 'HANYA_ABSEN_MASUK',
+      is_working_day: true,
+      late_minutes: 0,
+      early_leave_minutes: 0,
+      deduction_late: 0,
+      deduction_early_leave: 0,
+      deduction_missing_check_in: 0,
+      deduction_missing_check_out: 10000,
+      total_deduction: 10000,
+      calculation_version: '5.0.0',
+      calculated_at: '2026-08-03 17:00:00',
+      notes: 'Hanya scan masuk (08:02). Tidak scan pulang (Rp10.000).',
+    },
+    {
+      id: 3,
+      daily_attendance_id: 320260803,
+      employee_id: 3,
+      emp_num: '3',
+      no_id: '3',
+      nik: '3201010003',
+      nama: 'CITRA LESTARI',
+      unit: 'Kepegawaian (SDM)',
+      jabatan: 'HR Officer',
+      attendance_date: '2026-08-03',
+      day_name: 'Senin',
+      scheduled_check_in: '08:15',
+      scheduled_check_out: '16:30',
+      actual_check_in: null,
+      actual_check_out: '16:45',
+      attendance_status: 'HANYA_ABSEN_PULANG',
+      is_working_day: true,
+      late_minutes: 0,
+      early_leave_minutes: 0,
+      deduction_late: 0,
+      deduction_early_leave: 0,
+      deduction_missing_check_in: 10000,
+      deduction_missing_check_out: 0,
+      total_deduction: 10000,
+      calculation_version: '5.0.0',
+      calculated_at: '2026-08-03 17:00:00',
+      notes: 'Hanya scan pulang (16:45). Tidak scan masuk (Rp10.000).',
+    },
+    {
+      id: 4,
+      daily_attendance_id: 420260803,
+      employee_id: 4,
+      emp_num: '4',
+      no_id: '4',
+      nik: '3201010004',
+      nama: 'DEDDY KURNIAWAN',
+      unit: 'Operasional',
+      jabatan: 'Koordinator Lapangan',
+      attendance_date: '2026-08-03',
+      day_name: 'Senin',
+      scheduled_check_in: '08:15',
+      scheduled_check_out: '16:30',
+      actual_check_in: '07:50',
+      actual_check_out: '16:32',
+      attendance_status: 'HADIR_LENGKAP',
+      is_working_day: true,
+      late_minutes: 0,
+      early_leave_minutes: 0,
+      deduction_late: 0,
+      deduction_early_leave: 0,
+      deduction_missing_check_in: 0,
+      deduction_missing_check_out: 0,
+      total_deduction: 0,
+      calculation_version: '5.0.0',
+      calculated_at: '2026-08-03 17:00:00',
+      notes: 'Hadir tepat waktu & pulang sesuai jadwal. Bebas potongan.',
+    },
+  ]);
+
   // Login Handler
   const handleLogin = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -380,6 +513,7 @@ export default function DesktopSimulator() {
       setSession(newSession);
       setActiveMenu('dashboard');
       addAuditLog('admin', 'LOGIN_SUCCESS', 'AUTH', 'Login berhasil sebagai Administrator.');
+      setShowFirstRunDialog(true);
     } else if (u === 'operator' && p === 'Operator@SIAP2025') {
       const newSession: UserSession = {
         id: 2,
@@ -714,12 +848,38 @@ export default function DesktopSimulator() {
                       <Database className="w-4 h-4 shrink-0" />
                       <span>Backup Database</span>
                     </button>
+
+                    <button
+                      onClick={() => setActiveMenu('build')}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-semibold text-left transition cursor-pointer ${
+                        activeMenu === 'build' ? 'bg-blue-600 text-white shadow' : 'text-slate-300 hover:bg-slate-800'
+                      }`}
+                    >
+                      <PackageCheck className="w-4 h-4 shrink-0 text-emerald-400" />
+                      <span>Build & Rilis Windows</span>
+                    </button>
                   </>
                 )}
               </nav>
 
               {/* Sidebar Footer */}
-              <div className="p-3 border-t border-slate-800">
+              <div className="p-3 border-t border-slate-800 space-y-2">
+                <button
+                  onClick={() => setShowInstallModal(true)}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold bg-emerald-700 hover:bg-emerald-600 text-white transition cursor-pointer shadow-xs"
+                >
+                  <Smartphone className="w-3.5 h-3.5 text-emerald-200" />
+                  <span>Pasang APK / Aplikasi</span>
+                </button>
+
+                <button
+                  onClick={() => setShowAboutDialog(true)}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 transition cursor-pointer"
+                >
+                  <Info className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Tentang Aplikasi SIAP</span>
+                </button>
+
                 <button
                   onClick={handleLogout}
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold text-red-400 hover:bg-red-950/50 hover:text-red-300 transition cursor-pointer"
@@ -727,8 +887,8 @@ export default function DesktopSimulator() {
                   <LogOut className="w-4 h-4" />
                   <span>Keluar (Logout)</span>
                 </button>
-                <div className="mt-2 text-[10px] text-slate-500 text-center">
-                  Versi 1.0.0 (Tahap 1 Desktop)
+                <div className="text-[10px] text-slate-500 text-center">
+                  Versi 1.0.0 (Tahap 6: Rilis Windows)
                 </div>
               </div>
             </aside>
@@ -747,10 +907,28 @@ export default function DesktopSimulator() {
                     {activeMenu === 'laporan' && 'Laporan Rekapitulasi & Potongan'}
                     {activeMenu === 'pengaturan' && 'Pengaturan Sistem & Parameter'}
                     {activeMenu === 'backup' && 'Pencadangan Database SQLite'}
+                    {activeMenu === 'build' && 'Finalisasi Aplikasi, Build Executable (.EXE) & Installer Windows'}
                   </h3>
                 </div>
 
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setShowInstallModal(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold shadow-2xs transition cursor-pointer"
+                    title="Pasang aplikasi ke Android atau Desktop"
+                  >
+                    <Smartphone className="w-3.5 h-3.5 text-emerald-600" />
+                    <span className="hidden sm:inline">Pasang APK / Aplikasi</span>
+                  </button>
+
+                  <button
+                    onClick={() => setShowAboutDialog(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold shadow-2xs transition cursor-pointer"
+                  >
+                    <Info className="w-3.5 h-3.5 text-blue-600" />
+                    <span className="hidden sm:inline">Tentang SIAP</span>
+                  </button>
+
                   <div className="flex items-center gap-2">
                     <span
                       className={`text-[10px] font-extrabold px-2 py-0.5 rounded uppercase tracking-wider ${
@@ -820,86 +998,98 @@ export default function DesktopSimulator() {
                       </div>
                     </div>
 
-                    {/* 7 Kartu Statistik Tahap 1 (Kondisi Riil / Jujur 0 jika belum ada data) */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                      {/* 1. Total Karyawan */}
-                      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-blue-400 transition">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Karyawan</span>
-                          <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
-                        </div>
-                        <div className="text-3xl font-extrabold text-slate-900">0</div>
-                        <p className="text-[11px] text-slate-500 mt-1">Karyawan aktif terdaftar</p>
-                      </div>
+                    {/* 7 Kartu Statistik Tahap 5 */}
+                    {(() => {
+                      const totalHadirCount = dailyAttendanceList.filter(d => d.attendance_status === 'HADIR_LENGKAP' || d.actual_check_in || d.actual_check_out).length;
+                      const totalAlfaCount = dailyAttendanceList.filter(d => d.attendance_status === 'TIDAK_ABSEN').length;
+                      const totalTerlambatCount = deductionsList.filter(d => d.late_minutes > 0).length;
+                      const totalPulangCepatCount = deductionsList.filter(d => d.early_leave_minutes > 0).length;
+                      const totalPotonganRupiah = deductionsList.reduce((acc, d) => acc + d.total_deduction, 0);
 
-                      {/* 2. Total Hari Kerja */}
-                      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-slate-400 transition">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Hari Kerja</span>
-                          <span className="w-2.5 h-2.5 rounded-full bg-slate-700"></span>
-                        </div>
-                        <div className="text-3xl font-extrabold text-slate-900">{settings.target_hari_kerja_bulanan}</div>
-                        <p className="text-[11px] text-slate-500 mt-1">Target acuan hari kerja</p>
-                      </div>
+                      return (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                          {/* 1. Total Karyawan */}
+                          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-blue-400 transition">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Karyawan</span>
+                              <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
+                            </div>
+                            <div className="text-3xl font-extrabold text-slate-900">{simulatedEmployees.length}</div>
+                            <p className="text-[11px] text-slate-500 mt-1">Karyawan aktif terdaftar</p>
+                          </div>
 
-                      {/* 3. Total Hadir */}
-                      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-emerald-400 transition">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Hadir</span>
-                          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-                        </div>
-                        <div className="text-3xl font-extrabold text-emerald-700">0</div>
-                        <p className="text-[11px] text-slate-500 mt-1">Presensi berhasil tercatat</p>
-                      </div>
+                          {/* 2. Total Hari Kerja */}
+                          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-slate-400 transition">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Hari Kerja</span>
+                              <span className="w-2.5 h-2.5 rounded-full bg-slate-700"></span>
+                            </div>
+                            <div className="text-3xl font-extrabold text-slate-900">{settings.target_hari_kerja_bulanan}</div>
+                            <p className="text-[11px] text-slate-500 mt-1">Target acuan hari kerja</p>
+                          </div>
 
-                      {/* 4. Total Alfa */}
-                      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-red-400 transition">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Alfa</span>
-                          <span className="w-2.5 h-2.5 rounded-full bg-red-600"></span>
-                        </div>
-                        <div className="text-3xl font-extrabold text-red-600">0</div>
-                        <p className="text-[11px] text-slate-500 mt-1">Ketidakhadiran tanpa izin</p>
-                      </div>
+                          {/* 3. Total Hadir */}
+                          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-emerald-400 transition">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Hadir</span>
+                              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                            </div>
+                            <div className="text-3xl font-extrabold text-emerald-700">{totalHadirCount}</div>
+                            <p className="text-[11px] text-slate-500 mt-1">Presensi berhasil tercatat</p>
+                          </div>
 
-                      {/* 5. Terlambat */}
-                      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-amber-400 transition">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Terlambat</span>
-                          <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
-                        </div>
-                        <div className="text-3xl font-extrabold text-amber-600">0</div>
-                        <p className="text-[11px] text-slate-500 mt-1">Pelanggaran jam masuk</p>
-                      </div>
+                          {/* 4. Total Alfa */}
+                          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-red-400 transition">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Alfa</span>
+                              <span className="w-2.5 h-2.5 rounded-full bg-red-600"></span>
+                            </div>
+                            <div className="text-3xl font-extrabold text-red-600">{totalAlfaCount}</div>
+                            <p className="text-[11px] text-slate-500 mt-1">Ketidakhadiran tanpa izin</p>
+                          </div>
 
-                      {/* 6. Pulang Cepat */}
-                      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-amber-400 transition">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Pulang Cepat</span>
-                          <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
-                        </div>
-                        <div className="text-3xl font-extrabold text-amber-600">0</div>
-                        <p className="text-[11px] text-slate-500 mt-1">Pelanggaran jam pulang</p>
-                      </div>
+                          {/* 5. Terlambat */}
+                          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-amber-400 transition">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Terlambat</span>
+                              <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+                            </div>
+                            <div className="text-3xl font-extrabold text-amber-600">{totalTerlambatCount}</div>
+                            <p className="text-[11px] text-slate-500 mt-1">Pelanggaran jam masuk</p>
+                          </div>
 
-                      {/* 7. Total Potongan (Span 2 cols on lg) */}
-                      <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-red-400 transition lg:col-span-2">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Potongan Absensi</span>
-                          <span className="w-2.5 h-2.5 rounded-full bg-red-600"></span>
-                        </div>
-                        <div className="text-3xl font-extrabold text-red-600">Rp 0</div>
-                        <p className="text-[11px] text-slate-500 mt-1">Akumulasi tarif potongan absensi periode aktif</p>
-                      </div>
-                    </div>
+                          {/* 6. Pulang Cepat */}
+                          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-amber-400 transition">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Pulang Cepat</span>
+                              <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+                            </div>
+                            <div className="text-3xl font-extrabold text-amber-600">{totalPulangCepatCount}</div>
+                            <p className="text-[11px] text-slate-500 mt-1">Pelanggaran jam pulang</p>
+                          </div>
 
-                    {/* Banner Transparansi Kondisi Tahap 1 */}
+                          {/* 7. Total Potongan (Span 2 cols on lg) */}
+                          <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm hover:border-red-400 transition lg:col-span-2">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">Total Potongan Absensi</span>
+                              <span className="w-2.5 h-2.5 rounded-full bg-red-600"></span>
+                            </div>
+                            <div className="text-3xl font-extrabold text-red-600">
+                              Rp {totalPotonganRupiah.toLocaleString('id-ID')}
+                            </div>
+                            <p className="text-[11px] text-slate-500 mt-1">Akumulasi tarif potongan absensi periode aktif</p>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Banner Transparansi Kondisi Tahap 5 */}
                     <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-xs text-blue-900 flex items-start gap-3">
                       <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
                       <div>
-                        <h4 className="font-bold text-blue-950 mb-0.5">Kondisi Database Tahap 1 (Transparan & Jujur)</h4>
+                        <h4 className="font-bold text-blue-950 mb-0.5">Kondisi Database Tahap 5: Mesin Perhitungan Potongan & Rekapitulasi Aktif</h4>
                         <p className="text-blue-800 leading-relaxed">
-                          Sistem membaca langsung dari database SQLite lokal <code>siap_presensi.db</code>. Nilai statistik saat ini menampilkan angka <strong>0</strong> karena berkas transaksi absensi mesin belum di-import ke sistem. Modul pembacaan berkas Excel, kalkulasi absensi harian otomatis, dan laporan rekapitulasi akan dihubungkan pada <strong>Tahap 2</strong>.
+                          Sistem membaca langsung dari database SQLite lokal <code>siap_presensi.db</code>. Seluruh modul Master Karyawan, Import Absensi Excel, Transaksi Raw, Kalender Kerja, Absensi Harian, dan Mesin Kalkulasi Potongan Absensi telah aktif dan terintegrasi penuh. Anda dapat melakukan simulasi hitung potongan, rekapitulasi pegawai, serta peninjauan 17 kolom kalkulasi harian di menu <strong>Laporan & Rekap</strong>.
                         </p>
                       </div>
                     </div>
@@ -1286,32 +1476,61 @@ export default function DesktopSimulator() {
                   />
                 )}
 
-                {/* 8. PLACEHOLDER UNTUK MODUL TAHAP 5 (PERHITUNGAN POTONGAN & LAPORAN PRESENSI) */}
-                {activeMenu === 'laporan' && (
-                  <div className="h-full flex items-center justify-center p-8">
-                    <div className="max-w-lg w-full bg-white rounded-2xl border border-slate-200 p-8 text-center shadow-sm">
-                      <div className="w-16 h-16 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center mx-auto mb-4 text-2xl font-bold">
-                        📄
-                      </div>
-                      <h3 className="text-lg font-bold text-slate-900 mb-1 capitalize">
-                        Modul Laporan & Rekapitulasi Presensi
-                      </h3>
-                      <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-100 text-amber-800 border border-amber-200 mb-3">
-                        TAHAP 5: PERHITUNGAN POTONGAN & REKAP PDF
-                      </span>
-                      <p className="text-sm font-semibold text-blue-700 mb-2">
-                        Siap dilanjutkan setelah Tahap 4 disetujui.
-                      </p>
-                      <p className="text-xs text-slate-500 leading-relaxed">
-                        Tahap 4 telah berhasil memadukan Master Karyawan x Kalender Kerja x Transaksi Mentah dan membentuk tabel <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-slate-800">attendance_daily</code> dengan status kehadiran (HADIR_LENGKAP, HANYA_ABSEN_MASUK, HANYA_ABSEN_PULANG, TIDAK_ABSEN). Perhitungan nominal rupiah potongan dan pencetakan PDF rekapitulasi slip akan diimplementasikan pada Tahap 5.
-                      </p>
-                    </div>
-                  </div>
+                {/* 8. MODUL TAHAP 5: PERHITUNGAN POTONGAN & REKAP LAPORAN */}
+                {activeMenu === 'laporan' && session && (
+                  <DeductionSimulatorView
+                    userSession={session}
+                    employees={simulatedEmployees}
+                    calendarData={calendarData}
+                    dailyAttendanceList={dailyAttendanceList}
+                    settings={settings}
+                    deductionsList={deductionsList}
+                    onUpdateDeductions={(newList) => setDeductionsList(newList)}
+                    onAddAuditLog={(action, module, description) =>
+                      addAuditLog(session.username, action, module, description)
+                    }
+                  />
+                )}
+
+                {/* 9. MODUL TAHAP 6: BUILD EXECUTABLE (.EXE) & INSTALLER WINDOWS */}
+                {activeMenu === 'build' && session && (
+                  <BuildDeploymentSimulatorView
+                    userSession={session}
+                    onAddAuditLog={(action, module, description) =>
+                      addAuditLog(session.username, action, module, description)
+                    }
+                    onOpenAboutDialog={() => setShowAboutDialog(true)}
+                    onOpenFirstRunDialog={() => setShowFirstRunDialog(true)}
+                  />
                 )}
               </main>
             </div>
           </div>
         )}
+
+        {/* Modal Dialog Tentang Aplikasi (Tahap 6) */}
+        <AboutDialogModal
+          isOpen={showAboutDialog}
+          onClose={() => setShowAboutDialog(false)}
+        />
+
+        {/* Modal Dialog First-Run Setup / Keamanan (Tahap 6) */}
+        {session && (
+          <FirstRunDialogModal
+            isOpen={showFirstRunDialog}
+            onClose={() => setShowFirstRunDialog(false)}
+            currentUser={session}
+            onAddAuditLog={(action, module, description) =>
+              addAuditLog(session.username, action, module, description)
+            }
+          />
+        )}
+
+        {/* Modal Pasang APK / PWA */}
+        <InstallAppModal
+          isOpen={showInstallModal}
+          onClose={() => setShowInstallModal(false)}
+        />
       </div>
     </div>
   );

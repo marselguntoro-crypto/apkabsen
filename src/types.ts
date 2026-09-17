@@ -188,5 +188,54 @@ export interface DailyAttendanceItem {
   notes: string;
 }
 
+export interface AttendanceDeductionItem {
+  id: number;
+  daily_attendance_id: number;
+  employee_id: number;
+  emp_num: string;
+  no_id: string;
+  nik: string;
+  nama: string;
+  unit: string;
+  jabatan: string;
+  attendance_date: string;
+  day_name: string;
+  scheduled_check_in: string;
+  scheduled_check_out: string;
+  actual_check_in: string | null;
+  actual_check_out: string | null;
+  attendance_status: string;
+  is_working_day: boolean;
+  late_minutes: number;
+  early_leave_minutes: number;
+  deduction_late: number;
+  deduction_early_leave: number;
+  deduction_missing_check_in: number;
+  deduction_missing_check_out: number;
+  total_deduction: number;
+  calculation_version: string;
+  calculated_at: string;
+  notes: string;
+}
+
+export interface DeductionSummaryItem {
+  employee_id: number;
+  emp_num: string;
+  no_id: string;
+  nik: string;
+  nama: string;
+  unit: string;
+  jabatan: string;
+  total_hadir: number;
+  total_terlambat: number;
+  total_pulang_cepat: number;
+  total_tanpa_scan: number;
+  total_potongan_terlambat: number;
+  total_potongan_pulang_cepat: number;
+  total_potongan_tanpa_scan: number;
+  total_nominal_potongan: number;
+}
+
+
 
 

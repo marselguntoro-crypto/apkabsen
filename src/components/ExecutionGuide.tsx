@@ -49,9 +49,39 @@ export default function ExecutionGuide() {
     },
     {
       id: 'step-7',
-      title: '7. Kompilasi Menjadi File Windows Executable (.EXE)',
-      desc: 'Membuat paket installer standalone tanpa perlu instalasi Python di komputer klien:',
-      cmd: 'pyinstaller --noconfirm --onedir --windowed --name "SIAP_Presensi" main.py',
+      title: '7. Build Executable Otomatis (build_windows.bat)',
+      desc: 'Menjalankan pipeline otomatis: cek venv, clean build, eksekusi test suite pytest, dan kompilasi PyInstaller:',
+      cmd: '.\\build_windows.bat',
+    },
+    {
+      id: 'step-8',
+      title: '8. Kompilasi Manual PyInstaller (SIAP.spec)',
+      desc: 'Mengompilasi main.py menjadi dist\\SIAP\\SIAP.exe dalam mode Pure GUI (console=False) dengan ikon SIAP.ico:',
+      cmd: 'pyinstaller --clean SIAP.spec',
+    },
+    {
+      id: 'step-9',
+      title: '9. Kompilasi Installer Inno Setup 64-bit',
+      desc: 'Membangun file installer setup mandiri Windows SIAP_Setup_v1.0.0.exe:',
+      cmd: '"C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe" installer\\SIAP_Setup.iss',
+    },
+    {
+      id: 'step-10',
+      title: '10. Uji Ketahanan Deployment (test_phase6_deployment.py)',
+      desc: 'Memverifikasi isolasi %LOCALAPPDATA%\\SIAP, inisialisasi DB idempoten, First-Run Wizard, dan aset packaging:',
+      cmd: 'pytest tests/test_phase6_deployment.py -v',
+    },
+    {
+      id: 'step-11',
+      title: '11. Jalankan Executable Mandiri (Tanpa CMD)',
+      desc: 'Menjalankan binary hasil build langsung pada Windows (pastikan venv tidak diperlukan lagi):',
+      cmd: '.\\dist\\SIAP\\SIAP.exe',
+    },
+    {
+      id: 'step-12',
+      title: '12. Generate Buku Panduan PDF Resmi (ReportLab)',
+      desc: 'Membuat atau memperbarui berkas PANDUAN_PENGGUNA_SIAP.pdf secara otomatis:',
+      cmd: 'python scripts/generate_user_manual.py',
     },
   ];
 

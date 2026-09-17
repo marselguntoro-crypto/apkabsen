@@ -1,0 +1,62 @@
+name: Build Windows Executable and Installer
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build SIAP Windows .EXE and Inno Setup Installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          cd siap_presensi
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run Test Suite
+        run: |
+          cd siap_presensi
+          pytest tests -v
+
+      - name: Build Standalone Executable with PyInstaller
+        run: |
+          cd siap_presensi
+          pyinstaller --clean SIAP.spec
+
+      - name: Install Inno Setup
+        uses: chride/innosetup-action@v1.0.1
+        with:
+          version: '6.2.2'
+
+      - name: Compile Inno Setup Installer
+        run: |
+          cd siap_presensi
+          iscc installer/SIAP_Setup.iss
+
+      - name: Upload Standalone Executable Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SIAP_Portable_Windows_x64
+          path: siap_presensi/dist/SIAP/
+
+      - name: Upload Windows Setup Installer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SIAP_Setup_v1.0.0_Installer
+          path: siap_presensi/installer/output/*.exe

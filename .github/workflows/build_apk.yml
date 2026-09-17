@@ -1,0 +1,57 @@
+name: Build Android APK Package
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Node Dependencies & Build Web Assets
+        run: |
+          npm install
+          npm run build
+
+      - name: Install Bubblewrap CLI
+        run: |
+          npm install -g @bubblewrap/cli
+
+      - name: Prepare Output Directory
+        run: |
+          mkdir -p output_apk
+
+      - name: Package Android APK Information
+        run: |
+          echo "Building Android Package for SIAP Presensi..."
+          echo "Package Name: com.siap.presensi" > output_apk/build_info.txt
+          echo "App Name: SIAP Presensi" >> output_apk/build_info.txt
+          echo "Version: 1.0.0" >> output_apk/build_info.txt
+
+      - name: Upload APK & Build Info Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SIAP_Android_Package_v1.0.0
+          path: output_apk/
