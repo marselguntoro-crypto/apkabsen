@@ -109,7 +109,7 @@ if exist "dist\SIAP\SIAP.exe" (
     echo.
     echo Langkah selanjutnya:
     echo 1. Jalankan pengujian smoke test pada dist\SIAP\SIAP.exe
-    echo 2. Kompilasi installer menggunakan Inno Setup: installer\SIAP_Setup.iss
+    echo 2. Kompilasi installer dengan script: build_installer.bat (atau buka installer\SIAP_Setup.iss)
     echo ==============================================================================
     echo Tekan tombol apa saja untuk keluar...
     pause >nul

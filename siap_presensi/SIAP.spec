@@ -21,6 +21,7 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 # Data statis yang wajib disertakan
 added_datas = [
     (os.path.join(BASE_DIR, 'assets'), 'assets'),
+    (os.path.join(BASE_DIR, 'PANDUAN_PENGGUNA_SIAP.pdf'), '.'),
 ]
 
 # Modul tersembunyi yang perlu di-bundle secara eksplisit

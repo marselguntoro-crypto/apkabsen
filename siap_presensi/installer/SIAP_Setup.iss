@@ -57,6 +57,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; Berkas biner dan aset dari hasil PyInstaller (dist/SIAP)
 Source: "..\dist\SIAP\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\PANDUAN_PENGGUNA_SIAP.pdf"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; Shortcut Start Menu

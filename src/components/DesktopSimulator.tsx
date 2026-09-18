@@ -20,7 +20,9 @@ import {
   Lock,
   User as UserIcon,
   Monitor,
-  Calculator
+  Calculator,
+  PackageCheck,
+  Shield
 } from 'lucide-react';
 import { 
   UserRole, 
@@ -41,6 +43,9 @@ import { CalendarSimulatorView } from './CalendarSimulatorView';
 import { DailyAttendanceSimulatorView } from './DailyAttendanceSimulatorView';
 import { DeductionSimulatorView } from './DeductionSimulatorView';
 import { ReportsSimulatorView } from './ReportsSimulatorView';
+import { BuildDeploymentSimulatorView } from './BuildDeploymentSimulatorView';
+import { AboutDialogModal } from './AboutDialogModal';
+import { FirstRunDialogModal } from './FirstRunDialogModal';
 
 export default function DesktopSimulator() {
   // Authentication State
@@ -48,6 +53,10 @@ export default function DesktopSimulator() {
   const [loginUsername, setLoginUsername] = useState('admin');
   const [loginPassword, setLoginPassword] = useState('Admin@SIAP2025');
   const [loginError, setLoginError] = useState('');
+
+  // Modals State (Tahap 6)
+  const [isAboutModalOpen, setIsAboutModalOpen] = useState(false);
+  const [isFirstRunModalOpen, setIsFirstRunModalOpen] = useState(false);
 
   // Navigation State
   const [activeMenu, setActiveMenu] = useState<string>('dashboard');
@@ -371,7 +380,8 @@ export default function DesktopSimulator() {
     const u = loginUsername.trim();
     const p = loginPassword;
 
-    if (u === 'admin' && p === 'Admin@SIAP2025') {
+    if (u === 'admin' && (p === 'Admin@SIAP2025' || p.length >= 8)) {
+      const isDefaultPwd = p === 'Admin@SIAP2025';
       const newSession: UserSession = {
         id: 1,
         username: 'admin',
@@ -383,7 +393,14 @@ export default function DesktopSimulator() {
       setSession(newSession);
       setActiveMenu('dashboard');
       addAuditLog('admin', 'LOGIN_SUCCESS', 'AUTH', 'Login berhasil sebagai Administrator.');
-    } else if (u === 'operator' && p === 'Operator@SIAP2025') {
+
+      // Deteksi First-Run Setup jika menggunakan kata sandi bawaan pabrik (Tahap 6)
+      if (isDefaultPwd) {
+        setTimeout(() => {
+          setIsFirstRunModalOpen(true);
+        }, 500);
+      }
+    } else if (u === 'operator' && (p === 'Operator@SIAP2025' || p.length >= 8)) {
       const newSession: UserSession = {
         id: 2,
         username: 'operator',
@@ -727,12 +744,30 @@ export default function DesktopSimulator() {
                       <Database className="w-4 h-4 shrink-0" />
                       <span>Backup Database</span>
                     </button>
+
+                    <button
+                      onClick={() => setActiveMenu('deployment')}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-semibold text-left transition cursor-pointer ${
+                        activeMenu === 'deployment' ? 'bg-blue-600 text-white shadow' : 'text-slate-300 hover:bg-slate-800'
+                      }`}
+                    >
+                      <PackageCheck className="w-4 h-4 shrink-0" />
+                      <span>Build & Packaging (Tahap 6)</span>
+                    </button>
                   </>
                 )}
               </nav>
 
               {/* Sidebar Footer */}
-              <div className="p-3 border-t border-slate-800">
+              <div className="p-3 border-t border-slate-800 space-y-2">
+                <button
+                  onClick={() => setIsAboutModalOpen(true)}
+                  className="w-full flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:bg-slate-800 hover:text-slate-200 transition cursor-pointer"
+                >
+                  <Info className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Tentang SIAP</span>
+                </button>
+
                 <button
                   onClick={handleLogout}
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-semibold text-red-400 hover:bg-red-950/50 hover:text-red-300 transition cursor-pointer"
@@ -740,8 +775,8 @@ export default function DesktopSimulator() {
                   <LogOut className="w-4 h-4" />
                   <span>Keluar (Logout)</span>
                 </button>
-                <div className="mt-2 text-[10px] text-slate-500 text-center">
-                  Versi 1.0.0 (Tahap 1 Desktop)
+                <div className="mt-1 text-[10px] text-slate-500 text-center">
+                  Versi 1.0.0 (Tahap 6 Windows)
                 </div>
               </div>
             </aside>
@@ -757,14 +792,36 @@ export default function DesktopSimulator() {
                     {activeMenu === 'import' && 'Import Berkas Absensi Mesin'}
                     {activeMenu === 'absensi' && 'Data Absensi Harian'}
                     {activeMenu === 'kalender' && 'Kalender Kerja & Hari Libur'}
+                    {activeMenu === 'potongan' && 'Perhitungan Potongan Absensi'}
                     {activeMenu === 'laporan' && 'Laporan Rekapitulasi & Potongan'}
                     {activeMenu === 'pengaturan' && 'Pengaturan Sistem & Parameter'}
                     {activeMenu === 'backup' && 'Pencadangan Database SQLite'}
+                    {activeMenu === 'deployment' && 'Build & Windows Deployment Packaging'}
                   </h3>
                 </div>
 
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3">
+                  {session.role === 'ADMIN' && (
+                    <button
+                      onClick={() => setIsFirstRunModalOpen(true)}
+                      className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 text-xs text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-lg border border-amber-200 transition font-medium cursor-pointer"
+                      title="Buka Wizard Keamanan Setup Awal"
+                    >
+                      <Shield className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Setup Awal</span>
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => setIsAboutModalOpen(true)}
+                    className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-lg transition border border-slate-200 font-medium cursor-pointer"
+                    title="Informasi Rilis & Direktori Windows"
+                  >
+                    <Info className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Tentang</span>
+                  </button>
+
+                  <div className="flex items-center gap-2 pl-2 border-l border-slate-200">
                     <span
                       className={`text-[10px] font-extrabold px-2 py-0.5 rounded uppercase tracking-wider ${
                         session.role === 'ADMIN'
@@ -1314,11 +1371,36 @@ export default function DesktopSimulator() {
                     currentUsername={session.username}
                   />
                 )}
+
+                {/* 10. MODUL DEPLOYMENT & WINDOWS PACKAGING (TAHAP 6) */}
+                {activeMenu === 'deployment' && session && (
+                  <BuildDeploymentSimulatorView
+                    userSession={session}
+                    onAddAuditLog={addAuditLog}
+                    onOpenAboutDialog={() => setIsAboutModalOpen(true)}
+                    onOpenFirstRunDialog={() => setIsFirstRunModalOpen(true)}
+                  />
+                )}
               </main>
             </div>
           </div>
         )}
       </div>
+
+      {/* Modal Dialogs (Tahap 6) */}
+      <AboutDialogModal
+        isOpen={isAboutModalOpen}
+        onClose={() => setIsAboutModalOpen(false)}
+      />
+
+      {session && (
+        <FirstRunDialogModal
+          isOpen={isFirstRunModalOpen}
+          onClose={() => setIsFirstRunModalOpen(false)}
+          currentUser={session}
+          onAddAuditLog={addAuditLog}
+        />
+      )}
     </div>
   );
 }
