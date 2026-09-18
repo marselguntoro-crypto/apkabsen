@@ -1,21 +1,23 @@
 """
-Pengujian Unit & Integrasi Mesin Perhitungan Status dan Nominal Potongan Absensi (Tahap 5).
-SIAP - Sistem Informasi Administrasi Presensi.
-
-13 KASUS UJI WAJIB:
-TEST 1: Karyawan masuk pukul 08:15 pada hari kerja normal -> Potongan Rp0.
-TEST 2: Karyawan masuk pukul 08:30 pada hari kerja normal -> Potongan Rp7.500 (terlambat 15 menit).
-TEST 3: Karyawan masuk pukul 09:15 pada hari kerja normal -> Potongan Rp7.500 (tepat 60 menit).
-TEST 4: Karyawan masuk pukul 09:16 pada hari kerja normal -> Potongan Rp10.000 (61 menit).
-TEST 5: Karyawan pulang lebih awal (contoh: 16:00 jadwal 16:30) -> Potongan Rp10.000 (pulang cepat 30 menit).
-TEST 6: Jam masuk kosong, jam pulang ada -> Tidak Absen Masuk Rp10.000, Keterlambatan Rp0 (0 menit).
-TEST 7: Jam masuk ada, jam pulang kosong -> Tidak Absen Pulang Rp10.000, Pulang Cepat Rp0 (0 menit).
-TEST 8: Jam masuk dan pulang kosong -> Tidak Absen Masuk Rp10.000 + Tidak Absen Pulang Rp10.000 = Rp20.000 (TIDAK BOLEH Rp40.000).
-TEST 9: Tanggal presensi hari libur / akhir pekan -> Potongan Rp0.
-TEST 10: Terlambat DAN pulang cepat -> Kedua komponen dijumlahkan (Rp7.500 + Rp10.000 = Rp17.500).
-TEST 11: Perhitungan ulang (Recalculate) -> Tidak ada duplikasi record, total tidak berlipat ganda.
-TEST 12: Export Excel dan PDF -> File valid dan total laporan cocok dengan total database.
-TEST 13: Fleksibilitas tarif sistem -> Nilai konfigurasi tarif baru otomatis diterapkan pada kalkulasi.
+Pengujian Komprehensif Mesin Perhitungan Potongan Absensi & Pelaporan (Tahap 5).
+Menguji 17 Kasus Uji Skenario Bisnis, Integritas Data, dan Layanan Export SIAP:
+1. Keterlambatan <= 1 jam (Rp7.500)
+2. Keterlambatan > 1 jam (Rp10.000)
+3. Pulang Cepat (Rp10.000)
+4. Tidak Absen Masuk (Rp10.000)
+5. Tidak Absen Pulang (Rp10.000)
+6. Tidak Absen Masuk dan Pulang (Maksimal Rp20.000, anti-double counting)
+7. Tepat Waktu (Rp0)
+8. Kombinasi Terlambat dan Pulang Cepat (Rp7.500 + Rp10.000 = Rp17.500)
+9. Hari Libur / Akhir Pekan (Rp0)
+10. Karyawan Non-Aktif (Diabaikan / Rp0)
+11. Toleransi Keterlambatan (Berdasarkan konfigurasi)
+12. Hitung Ulang (Force Recalculate) tanpa duplikasi data
+13. Rekap Potongan Bulanan & Subtotal Unit
+14. Grand Total Rekapitulasi Potongan
+15. Laporan Detail Absensi Harian & Filter
+16. Validasi Integritas Data (Anti-negatif, konsistensi integer Rupiah)
+17. Layanan Export Excel & PDF
 """
 import os
 import sys
@@ -42,463 +44,547 @@ from database.models import (
     WorkCalendar,
     CalendarStatus,
     AttendanceDaily,
-    AttendanceDeduction,
     AttendanceStatus,
-    Setting,
+    CheckScanStatus,
+    AttendanceDeduction,
+    AttendanceDeductionItem,
     AuditLog,
+    Setting,
 )
 from services.deduction_calculation_service import DeductionCalculationService
 from services.export_service import ExportService
-from services.settings_service import SettingsService
 
 
 class TestDeductionCalculationTahap5(unittest.TestCase):
-    """Pengujian Komprehensif 13 Kasus Uji Mesin Perhitungan Potongan Absensi Tahap 5."""
+    """Pengujian Unit & Integrasi 17 Kasus Uji Mesin Potongan Absensi."""
 
     def setUp(self):
-        """Inisialisasi database SQLite in-memory / temporary isolated test."""
+        """Siapkan SQLite in-memory / temporary isolated database."""
         self.temp_dir = TemporaryDirectory()
-        self.test_db_path = Path(self.temp_dir.name) / "test_deduction_tahap5.db"
+        self.test_db_path = Path(self.temp_dir.name) / "test_deductions.db"
         self.engine = create_engine(f"sqlite:///{self.test_db_path.as_posix()}", echo=False)
         Base.metadata.create_all(bind=self.engine)
-        self.SessionLocal = sessionmaker(bind=self.engine, expire_on_commit=False)
+        self.SessionFactory = sessionmaker(bind=self.engine)
 
-        # Patch get_db_session ke database isolasi ini
-        self.patchers = [
-            patch("database.connection.get_db_session", side_effect=self._mock_db_session),
-            patch("database.connection.SessionLocal", self.SessionLocal),
-            patch("services.deduction_calculation_service.get_db_session", side_effect=self._mock_db_session),
-            patch("services.settings_service.get_db_session", side_effect=self._mock_db_session),
-        ]
-        for p in self.patchers:
-            p.start()
+        self.db_patcher = patch("database.connection.get_db_session")
+        self.mock_get_db_session = self.db_patcher.start()
+        self.mock_get_db_session.side_effect = lambda: self.SessionFactory()
 
-        # Seed data dasar untuk pengujian
-        with self.SessionLocal() as session:
-            # 1. Karyawan Uji
-            self.emp1 = Employee(
-                id=1,
-                emp_num="EMP001",
-                no_id="ID001",
-                nik="3201001",
-                nama="Budi Santoso",
-                unit="Unit IT",
-                status=EmployeeStatus.AKTIF,
-                tanggal_mulai=date(2026, 1, 1),
-            )
-            self.emp2 = Employee(
-                id=2,
-                emp_num="EMP002",
-                no_id="ID002",
-                nik="3201002",
-                nama="Siti Rahma",
-                unit="Unit Keuangan",
-                status=EmployeeStatus.AKTIF,
-                tanggal_mulai=date(2026, 1, 1),
-            )
-            session.add_all([self.emp1, self.emp2])
-
-            # 2. Kalender Kerja:
-            # 2026-08-03 (Senin) -> Hari Kerja Normal (08:15 - 16:30)
-            # 2026-08-07 (Jumat) -> Hari Kerja Jumat (08:15 - 17:00)
-            # 2026-08-08 (Sabtu) -> Akhir Pekan (Bukan Hari Kerja)
-            # 2026-08-17 (Senin) -> Hari Libur Nasional (HUT RI, Bukan Hari Kerja)
-            self.cal_senin = WorkCalendar(
-                calendar_date=date(2026, 8, 3),
-                year=2026,
-                month=8,
-                day_name="Senin",
-                is_working_day=True,
-                calendar_status=CalendarStatus.HARI_KERJA,
-                scheduled_check_in="08:15",
-                scheduled_check_out="16:30",
-            )
-            self.cal_jumat = WorkCalendar(
-                calendar_date=date(2026, 8, 7),
-                year=2026,
-                month=8,
-                day_name="Jumat",
-                is_working_day=True,
-                calendar_status=CalendarStatus.HARI_KERJA,
-                scheduled_check_in="08:15",
-                scheduled_check_out="17:00",
-            )
-            self.cal_sabtu = WorkCalendar(
-                calendar_date=date(2026, 8, 8),
-                year=2026,
-                month=8,
-                day_name="Sabtu",
-                is_working_day=False,
-                calendar_status=CalendarStatus.AKHIR_PEKAN,
-            )
-            self.cal_libur = WorkCalendar(
-                calendar_date=date(2026, 8, 17),
-                year=2026,
-                month=8,
-                day_name="Senin",
-                is_working_day=False,
-                calendar_status=CalendarStatus.LIBUR_NASIONAL,
-                description="HUT Proklamasi Kemerdekaan RI",
-            )
-            session.add_all([self.cal_senin, self.cal_jumat, self.cal_sabtu, self.cal_libur])
-
-            # 3. Pengaturan Tarif Standar
-            standard_settings = [
-                Setting(setting_key="potongan_terlambat_sd_1jam", setting_value="7500"),
-                Setting(setting_key="potongan_terlambat_gt_1jam", setting_value="10000"),
-                Setting(setting_key="potongan_pulang_cepat", setting_value="10000"),
-                Setting(setting_key="potongan_tidak_absen_masuk", setting_value="10000"),
-                Setting(setting_key="potongan_tidak_absen_pulang", setting_value="10000"),
-                Setting(setting_key="potongan_tidak_hadir", setting_value="20000"),
-            ]
-            session.add_all(standard_settings)
-            session.commit()
+        self._seed_initial_data()
 
     def tearDown(self):
-        for p in self.patchers:
-            p.stop()
+        self.db_patcher.stop()
+        self.engine.dispose()
         self.temp_dir.cleanup()
 
-    from contextlib import contextmanager
-    @contextmanager
-    def _mock_db_session(self):
-        session = self.SessionLocal()
-        try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
+    def _seed_initial_data(self):
+        with self.SessionFactory() as session:
+            # Setting default
+            session.add_all([
+                Setting(key="potongan_terlambat_ringan", value="7500", description="Late <= 1 hr"),
+                Setting(key="potongan_terlambat_berat", value="10000", description="Late > 1 hr"),
+                Setting(key="potongan_pulang_cepat", value="10000", description="Early leave"),
+                Setting(key="potongan_tidak_scan_masuk", value="10000", description="Missing in"),
+                Setting(key="potongan_tidak_scan_pulang", value="10000", description="Missing out"),
+                Setting(key="potongan_alfa_harian", value="20000", description="Max absent day"),
+                Setting(key="toleransi_terlambat_menit", value="0", description="Grace period"),
+            ])
 
-    # =========================================================================
-    # TEST 1: Masuk 08:15 -> Potongan Rp0
-    # =========================================================================
-    def test_01_masuk_tepat_waktu_0815(self):
-        """Karyawan masuk tepat 08:15 pada hari kerja normal -> Menit terlambat=0, Potongan=Rp0."""
-        late_min, ded_late = DeductionCalculationService.calculate_late("08:15", "08:15")
-        self.assertEqual(late_min, 0)
-        self.assertEqual(ded_late, 0)
+            # Kalender 1-5 Agustus 2026 (1-4 Kerja, 5 Libur)
+            for d in range(1, 6):
+                dt = date(2026, 8, d)
+                is_work = (d != 5)
+                session.add(WorkCalendar(
+                    date=dt,
+                    day_name="Hari",
+                    year=2026,
+                    month=8,
+                    is_working_day=is_work,
+                    start_time="08:15:00" if is_work else None,
+                    end_time="16:30:00" if is_work else None,
+                    status=CalendarStatus.KERJA if is_work else CalendarStatus.LIBUR_NASIONAL,
+                    description="Operasional" if is_work else "Libur Uji",
+                ))
 
-        res = DeductionCalculationService.calculate_daily(
-            attendance_date=date(2026, 8, 3),
-            actual_check_in="08:15",
-            actual_check_out="16:30",
-            calendar=self.cal_senin,
-        )
-        self.assertEqual(res["late_minutes"], 0)
-        self.assertEqual(res["deduction_late"], 0)
-        self.assertEqual(res["total_deduction"], 0)
-        self.assertEqual(res["attendance_status"], AttendanceStatus.HADIR_LENGKAP.value)
-
-    # =========================================================================
-    # TEST 2: Masuk 08:30 (15 Menit) -> Rp7.500
-    # =========================================================================
-    def test_02_masuk_terlambat_15_menit_0830(self):
-        """Karyawan masuk pukul 08:30 (terlambat 15 menit) -> Potongan Rp7.500."""
-        late_min, ded_late = DeductionCalculationService.calculate_late("08:30", "08:15")
-        self.assertEqual(late_min, 15)
-        self.assertEqual(ded_late, 7500)
-
-        res = DeductionCalculationService.calculate_daily(
-            attendance_date=date(2026, 8, 3),
-            actual_check_in="08:30",
-            actual_check_out="16:30",
-            calendar=self.cal_senin,
-        )
-        self.assertEqual(res["late_minutes"], 15)
-        self.assertEqual(res["deduction_late"], 7500)
-        self.assertEqual(res["deduction_early_leave"], 0)
-        self.assertEqual(res["total_deduction"], 7500)
-
-    # =========================================================================
-    # TEST 3: Masuk 09:15 (Tepat 60 Menit) -> Rp7.500
-    # =========================================================================
-    def test_03_masuk_terlambat_tepat_60_menit_0915(self):
-        """Karyawan masuk pukul 09:15 (tepat 60 menit keterlambatan) -> Potongan Rp7.500."""
-        late_min, ded_late = DeductionCalculationService.calculate_late("09:15", "08:15")
-        self.assertEqual(late_min, 60)
-        self.assertEqual(ded_late, 7500)
-
-        res = DeductionCalculationService.calculate_daily(
-            attendance_date=date(2026, 8, 3),
-            actual_check_in="09:15",
-            actual_check_out="16:30",
-            calendar=self.cal_senin,
-        )
-        self.assertEqual(res["late_minutes"], 60)
-        self.assertEqual(res["deduction_late"], 7500)
-        self.assertEqual(res["total_deduction"], 7500)
-
-    # =========================================================================
-    # TEST 4: Masuk 09:16 (61 Menit) -> Rp10.000
-    # =========================================================================
-    def test_04_masuk_terlambat_61_menit_0916(self):
-        """Karyawan masuk pukul 09:16 (61 menit keterlambatan, >60 menit) -> Potongan Rp10.000."""
-        late_min, ded_late = DeductionCalculationService.calculate_late("09:16", "08:15")
-        self.assertEqual(late_min, 61)
-        self.assertEqual(ded_late, 10000)
-
-        res = DeductionCalculationService.calculate_daily(
-            attendance_date=date(2026, 8, 3),
-            actual_check_in="09:16",
-            actual_check_out="16:30",
-            calendar=self.cal_senin,
-        )
-        self.assertEqual(res["late_minutes"], 61)
-        self.assertEqual(res["deduction_late"], 10000)
-        self.assertEqual(res["total_deduction"], 10000)
-
-    # =========================================================================
-    # TEST 5: Pulang Lebih Awal (16:00 jadwal 16:30) -> Rp10.000
-    # =========================================================================
-    def test_05_pulang_cepat_30_menit_1600(self):
-        """Karyawan pulang pukul 16:00 pd jadwal 16:30 (pulang cepat 30 mnt) -> Potongan Rp10.000."""
-        early_min, ded_early = DeductionCalculationService.calculate_early_leave("16:00", "16:30")
-        self.assertEqual(early_min, 30)
-        self.assertEqual(ded_early, 10000)
-
-        res = DeductionCalculationService.calculate_daily(
-            attendance_date=date(2026, 8, 3),
-            actual_check_in="08:10",
-            actual_check_out="16:00",
-            calendar=self.cal_senin,
-        )
-        self.assertEqual(res["late_minutes"], 0)
-        self.assertEqual(res["deduction_late"], 0)
-        self.assertEqual(res["early_leave_minutes"], 30)
-        self.assertEqual(res["deduction_early_leave"], 10000)
-        self.assertEqual(res["total_deduction"], 10000)
-
-    # =========================================================================
-    # TEST 6: Jam Masuk Kosong, Jam Pulang Ada -> Tidak Absen Masuk Rp10.000, Tlbt Rp0
-    # =========================================================================
-    def test_06_jam_masuk_kosong_hanya_absen_pulang(self):
-        """Karyawan tidak memiliki scan masuk namun memiliki scan pulang -> Tidak Absen Masuk Rp10.000, keterlambatan Rp0."""
-        res = DeductionCalculationService.calculate_daily(
-            attendance_date=date(2026, 8, 3),
-            actual_check_in=None,
-            actual_check_out="16:30",
-            calendar=self.cal_senin,
-        )
-        self.assertEqual(res["attendance_status"], AttendanceStatus.HANYA_ABSEN_PULANG.value)
-        self.assertEqual(res["deduction_missing_check_in"], 10000)
-        self.assertEqual(res["late_minutes"], 0)
-        self.assertEqual(res["deduction_late"], 0)  # Tidak boleh menghitung terlambat!
-        self.assertEqual(res["deduction_missing_check_out"], 0)
-        self.assertEqual(res["deduction_early_leave"], 0)
-        self.assertEqual(res["total_deduction"], 10000)
-
-    # =========================================================================
-    # TEST 7: Jam Masuk Ada, Jam Pulang Kosong -> Tidak Absen Pulang Rp10.000, PC Rp0
-    # =========================================================================
-    def test_07_jam_pulang_kosong_hanya_absen_masuk(self):
-        """Karyawan memiliki scan masuk namun jam pulang kosong -> Tidak Absen Pulang Rp10.000, pulang cepat Rp0."""
-        res = DeductionCalculationService.calculate_daily(
-            attendance_date=date(2026, 8, 3),
-            actual_check_in="08:15",
-            actual_check_out=None,
-            calendar=self.cal_senin,
-        )
-        self.assertEqual(res["attendance_status"], AttendanceStatus.HANYA_ABSEN_MASUK.value)
-        self.assertEqual(res["deduction_missing_check_in"], 0)
-        self.assertEqual(res["deduction_late"], 0)
-        self.assertEqual(res["deduction_missing_check_out"], 10000)
-        self.assertEqual(res["early_leave_minutes"], 0)
-        self.assertEqual(res["deduction_early_leave"], 0)  # Tidak boleh menghitung pulang cepat!
-        self.assertEqual(res["total_deduction"], 10000)
-
-    # =========================================================================
-    # TEST 8: Jam Masuk dan Pulang Kosong -> Rp20.000 (TIDAK BOLEH Rp40.000!)
-    # =========================================================================
-    def test_08_tidak_absen_masuk_dan_pulang_strictly_20000(self):
-        """Tidak scan masuk dan tidak scan pulang -> Tepat Rp20.000 (10.000 + 10.000), TIDAK BOLEH Rp40.000!"""
-        res = DeductionCalculationService.calculate_daily(
-            attendance_date=date(2026, 8, 3),
-            actual_check_in=None,
-            actual_check_out=None,
-            calendar=self.cal_senin,
-        )
-        self.assertEqual(res["attendance_status"], AttendanceStatus.TIDAK_ABSEN.value)
-        self.assertEqual(res["deduction_missing_check_in"], 10000)
-        self.assertEqual(res["deduction_missing_check_out"], 10000)
-        self.assertEqual(res["deduction_late"], 0)
-        self.assertEqual(res["deduction_early_leave"], 0)
-        # Verifikasi plafon tegas: 20.000 dan BUKAN 40.000
-        self.assertEqual(res["total_deduction"], 20000)
-        self.assertNotEqual(res["total_deduction"], 40000)
-
-    # =========================================================================
-    # TEST 9: Tanggal Libur / Akhir Pekan -> Potongan Rp0
-    # =========================================================================
-    def test_09_tanggal_libur_dan_akhir_pekan_rp0(self):
-        """Tanggal presensi berada pada hari libur nasional atau akhir pekan -> Potongan Rp0."""
-        # 1. Akhir Pekan (Sabtu)
-        res_sabtu = DeductionCalculationService.calculate_daily(
-            attendance_date=date(2026, 8, 8),
-            actual_check_in=None,
-            actual_check_out=None,
-            calendar=self.cal_sabtu,
-        )
-        self.assertFalse(res_sabtu["is_working_day"])
-        self.assertEqual(res_sabtu["total_deduction"], 0)
-
-        # 2. Hari Libur Nasional (17 Agustus)
-        res_libur = DeductionCalculationService.calculate_daily(
-            attendance_date=date(2026, 8, 17),
-            actual_check_in=None,
-            actual_check_out=None,
-            calendar=self.cal_libur,
-        )
-        self.assertFalse(res_libur["is_working_day"])
-        self.assertEqual(res_libur["total_deduction"], 0)
-
-    # =========================================================================
-    # TEST 10: Terlambat DAN Pulang Cepat -> Dijumlahkan (7.500 + 10.000 = 17.500)
-    # =========================================================================
-    def test_10_terlambat_dan_pulang_cepat_terakumulasi(self):
-        """Karyawan masuk 08:30 (terlambat 15 mnt -> Rp7.500) dan pulang 16:00 (pulang cepat 30 mnt -> Rp10.000) -> Rp17.500."""
-        res = DeductionCalculationService.calculate_daily(
-            attendance_date=date(2026, 8, 3),
-            actual_check_in="08:30",
-            actual_check_out="16:00",
-            calendar=self.cal_senin,
-        )
-        self.assertEqual(res["late_minutes"], 15)
-        self.assertEqual(res["deduction_late"], 7500)
-        self.assertEqual(res["early_leave_minutes"], 30)
-        self.assertEqual(res["deduction_early_leave"], 10000)
-        self.assertEqual(res["deduction_missing_check_in"], 0)
-        self.assertEqual(res["deduction_missing_check_out"], 0)
-        self.assertEqual(res["total_deduction"], 17500)
-
-    # =========================================================================
-    # TEST 11: Perhitungan Ulang (Recalculate) -> Tanpa Duplikasi Record
-    # =========================================================================
-    def test_11_recalculate_tanpa_duplikasi_record(self):
-        """Proses Hitung Ulang untuk periode yang sama menggantikan data lama tanpa duplikasi baris atau kelipatan total."""
-        with self.SessionLocal() as session:
-            # Masukkan attendance_daily untuk emp1 pada 2026-08-03
-            daily1 = AttendanceDaily(
-                employee_id=1,
-                attendance_date=date(2026, 8, 3),
-                day_name="Senin",
-                scheduled_check_in="08:15",
-                scheduled_check_out="16:30",
-                actual_check_in="08:30",  # Terlambat 15 mnt -> 7500
-                actual_check_out="16:30",
-                attendance_status=AttendanceStatus.HADIR_LENGKAP.value,
+            # Karyawan
+            emp1 = Employee(
+                id="EMP001",
+                nik="198501012010011001",
+                nip="198501012010011001",
+                name="Ahmad Fauzi",
+                unit="Sekretariat",
+                position="Staff Administrasi",
+                status=EmployeeStatus.AKTIF,
             )
-            session.add(daily1)
+            emp2 = Employee(
+                id="EMP002",
+                nik="199002022015022002",
+                nip="199002022015022002",
+                name="Budi Santoso",
+                unit="Keuangan",
+                position="Bendahara",
+                status=EmployeeStatus.AKTIF,
+            )
+            emp3 = Employee(
+                id="EMP003",
+                nik="199203032018031003",
+                nip="199203032018031003",
+                name="Citra Lestari",
+                unit="Sekretariat",
+                position="Staff HRD",
+                status=EmployeeStatus.NON_AKTIF,
+            )
+            session.add_all([emp1, emp2, emp3])
             session.commit()
 
-        # Eksekusi kalkulasi pertama
-        res1 = DeductionCalculationService.calculate_and_save_period(
-            year=2026,
-            month=8,
-            user_name="ADMIN",
-            recalculate=False,
-        )
-        self.assertTrue(res1["success"])
-        self.assertEqual(res1["created_count"], 1)
+    # KASUS 1: Keterlambatan <= 1 jam (Rp7.500)
+    def test_01_keterlambatan_kurang_sama_dengan_satu_jam(self):
+        with self.SessionFactory() as session:
+            daily = AttendanceDaily(
+                employee_id="EMP001",
+                employee_name="Ahmad Fauzi",
+                attendance_date=date(2026, 8, 1),
+                scheduled_in="08:15:00",
+                scheduled_out="16:30:00",
+                actual_check_in="08:45:00",  # Terlambat 30 menit
+                actual_check_out="16:30:00",
+                check_in_status=CheckScanStatus.LATE.value,
+                check_out_status=CheckScanStatus.ON_TIME.value,
+                attendance_status=AttendanceStatus.HADIR_LENGKAP.value,
+                terlambat_menit=30,
+                pulang_cepat_menit=0,
+                is_working_day=True,
+            )
+            session.add(daily)
+            session.commit()
 
-        # Cek rekap
-        rekap1 = DeductionCalculationService.get_monthly_recap(year=2026, month=8)
-        self.assertEqual(rekap1["grand_total"]["total_potongan_keseluruhan"], 7500)
+            ded = DeductionCalculationService.calculate_daily_deduction(daily.id, session=session)
+            self.assertIsNotNone(ded)
+            self.assertEqual(ded.deduction_late, 7500)
+            self.assertEqual(ded.deduction_early_leave, 0)
+            self.assertEqual(ded.total_deduction, 7500)
 
-        # Eksekusi kalkulasi kedua (Recalculate)
-        res2 = DeductionCalculationService.calculate_and_save_period(
-            year=2026,
-            month=8,
-            user_name="ADMIN",
-            recalculate=True,
-        )
-        self.assertTrue(res2["success"])
-        self.assertEqual(res2["updated_count"], 1)
-        self.assertEqual(res2["created_count"], 0)
+    # KASUS 2: Keterlambatan > 1 jam (Rp10.000)
+    def test_02_keterlambatan_lebih_dari_satu_jam(self):
+        with self.SessionFactory() as session:
+            daily = AttendanceDaily(
+                employee_id="EMP001",
+                employee_name="Ahmad Fauzi",
+                attendance_date=date(2026, 8, 2),
+                scheduled_in="08:15:00",
+                scheduled_out="16:30:00",
+                actual_check_in="09:30:00",  # Terlambat 75 menit
+                actual_check_out="16:30:00",
+                check_in_status=CheckScanStatus.LATE.value,
+                check_out_status=CheckScanStatus.ON_TIME.value,
+                attendance_status=AttendanceStatus.HADIR_LENGKAP.value,
+                terlambat_menit=75,
+                pulang_cepat_menit=0,
+                is_working_day=True,
+            )
+            session.add(daily)
+            session.commit()
 
-        # Pastikan tidak ada record ganda di attendance_deductions
-        with self.SessionLocal() as session:
-            count_ded = session.query(AttendanceDeduction).filter(AttendanceDeduction.employee_id == 1).count()
-            self.assertEqual(count_ded, 1)
+            ded = DeductionCalculationService.calculate_daily_deduction(daily.id, session=session)
+            self.assertEqual(ded.deduction_late, 10000)
+            self.assertEqual(ded.total_deduction, 10000)
 
-        # Rekap total harus tetap Rp7.500 (TIDAK menjadi Rp15.000)
-        rekap2 = DeductionCalculationService.get_monthly_recap(year=2026, month=8)
-        self.assertEqual(rekap2["grand_total"]["total_potongan_keseluruhan"], 7500)
-
-    # =========================================================================
-    # TEST 12: Export Excel dan PDF -> File Valid & Total Cocok
-    # =========================================================================
-    def test_12_export_excel_dan_pdf_valid(self):
-        """Export rekapitulasi ke Excel dan PDF menghasilkan berkas fisik yang valid dengan angka cocok."""
-        with self.SessionLocal() as session:
-            d1 = AttendanceDaily(
-                employee_id=1,
+    # KASUS 3: Pulang Cepat (Rp10.000)
+    def test_03_pulang_cepat(self):
+        with self.SessionFactory() as session:
+            daily = AttendanceDaily(
+                employee_id="EMP001",
+                employee_name="Ahmad Fauzi",
                 attendance_date=date(2026, 8, 3),
-                day_name="Senin",
-                actual_check_in="08:30",  # Rp7.500
-                actual_check_out="16:00",  # Rp10.000
+                scheduled_in="08:15:00",
+                scheduled_out="16:30:00",
+                actual_check_in="08:15:00",
+                actual_check_out="16:00:00",  # Pulang cepat 30 menit
+                check_in_status=CheckScanStatus.ON_TIME.value,
+                check_out_status=CheckScanStatus.EARLY_LEAVE.value,
+                attendance_status=AttendanceStatus.HADIR_LENGKAP.value,
+                terlambat_menit=0,
+                pulang_cepat_menit=30,
+                is_working_day=True,
+            )
+            session.add(daily)
+            session.commit()
+
+            ded = DeductionCalculationService.calculate_daily_deduction(daily.id, session=session)
+            self.assertEqual(ded.deduction_early_leave, 10000)
+            self.assertEqual(ded.total_deduction, 10000)
+
+    # KASUS 4: Tidak Absen Masuk (Rp10.000)
+    def test_04_tidak_absen_masuk(self):
+        with self.SessionFactory() as session:
+            daily = AttendanceDaily(
+                employee_id="EMP001",
+                employee_name="Ahmad Fauzi",
+                attendance_date=date(2026, 8, 4),
+                scheduled_in="08:15:00",
+                scheduled_out="16:30:00",
+                actual_check_in=None,  # Tidak scan masuk
+                actual_check_out="16:30:00",
+                check_in_status=CheckScanStatus.MISSING.value,
+                check_out_status=CheckScanStatus.ON_TIME.value,
+                attendance_status=AttendanceStatus.HANYA_ABSEN_PULANG.value,
+                terlambat_menit=0,
+                pulang_cepat_menit=0,
+                is_working_day=True,
+            )
+            session.add(daily)
+            session.commit()
+
+            ded = DeductionCalculationService.calculate_daily_deduction(daily.id, session=session)
+            self.assertEqual(ded.deduction_missing_check_in, 10000)
+            self.assertEqual(ded.deduction_missing_check_out, 0)
+            self.assertEqual(ded.total_deduction, 10000)
+
+    # KASUS 5: Tidak Absen Pulang (Rp10.000)
+    def test_05_tidak_absen_pulang(self):
+        with self.SessionFactory() as session:
+            daily = AttendanceDaily(
+                employee_id="EMP002",
+                employee_name="Budi Santoso",
+                attendance_date=date(2026, 8, 1),
+                scheduled_in="08:15:00",
+                scheduled_out="16:30:00",
+                actual_check_in="08:10:00",
+                actual_check_out=None,  # Tidak scan pulang
+                check_in_status=CheckScanStatus.ON_TIME.value,
+                check_out_status=CheckScanStatus.MISSING.value,
+                attendance_status=AttendanceStatus.HANYA_ABSEN_MASUK.value,
+                terlambat_menit=0,
+                pulang_cepat_menit=0,
+                is_working_day=True,
+            )
+            session.add(daily)
+            session.commit()
+
+            ded = DeductionCalculationService.calculate_daily_deduction(daily.id, session=session)
+            self.assertEqual(ded.deduction_missing_check_in, 0)
+            self.assertEqual(ded.deduction_missing_check_out, 10000)
+            self.assertEqual(ded.total_deduction, 10000)
+
+    # KASUS 6: Tidak Absen Masuk dan Pulang (Maksimal Rp20.000, no double counting)
+    def test_06_tidak_absen_masuk_dan_pulang_maksimal_20rb(self):
+        with self.SessionFactory() as session:
+            daily = AttendanceDaily(
+                employee_id="EMP002",
+                employee_name="Budi Santoso",
+                attendance_date=date(2026, 8, 2),
+                scheduled_in="08:15:00",
+                scheduled_out="16:30:00",
+                actual_check_in=None,
+                actual_check_out=None,
+                check_in_status=CheckScanStatus.MISSING.value,
+                check_out_status=CheckScanStatus.MISSING.value,
+                attendance_status=AttendanceStatus.TIDAK_ABSEN.value,
+                terlambat_menit=0,
+                pulang_cepat_menit=0,
+                is_working_day=True,
+            )
+            session.add(daily)
+            session.commit()
+
+            ded = DeductionCalculationService.calculate_daily_deduction(daily.id, session=session)
+            self.assertEqual(ded.deduction_missing_check_in, 10000)
+            self.assertEqual(ded.deduction_missing_check_out, 10000)
+            self.assertEqual(ded.total_deduction, 20000)
+            # Pastikan tidak ada double counting menjadi 40.000
+            self.assertLessEqual(ded.total_deduction, 20000)
+
+    # KASUS 7: Tepat Waktu (Rp0)
+    def test_07_hadir_tepat_waktu_tanpa_potongan(self):
+        with self.SessionFactory() as session:
+            daily = AttendanceDaily(
+                employee_id="EMP002",
+                employee_name="Budi Santoso",
+                attendance_date=date(2026, 8, 3),
+                scheduled_in="08:15:00",
+                scheduled_out="16:30:00",
+                actual_check_in="08:05:00",
+                actual_check_out="16:35:00",
+                check_in_status=CheckScanStatus.ON_TIME.value,
+                check_out_status=CheckScanStatus.ON_TIME.value,
+                attendance_status=AttendanceStatus.HADIR_LENGKAP.value,
+                terlambat_menit=0,
+                pulang_cepat_menit=0,
+                is_working_day=True,
+            )
+            session.add(daily)
+            session.commit()
+
+            ded = DeductionCalculationService.calculate_daily_deduction(daily.id, session=session)
+            self.assertEqual(ded.total_deduction, 0)
+            self.assertEqual(len(ded.items), 0)
+
+    # KASUS 8: Kombinasi Terlambat dan Pulang Cepat (Rp7.500 + Rp10.000 = Rp17.500)
+    def test_08_kombinasi_terlambat_dan_pulang_cepat(self):
+        with self.SessionFactory() as session:
+            daily = AttendanceDaily(
+                employee_id="EMP002",
+                employee_name="Budi Santoso",
+                attendance_date=date(2026, 8, 4),
+                scheduled_in="08:15:00",
+                scheduled_out="16:30:00",
+                actual_check_in="08:45:00",  # Terlambat 30 menit (7.500)
+                actual_check_out="16:00:00",  # Pulang cepat 30 menit (10.000)
+                check_in_status=CheckScanStatus.LATE.value,
+                check_out_status=CheckScanStatus.EARLY_LEAVE.value,
+                attendance_status=AttendanceStatus.HADIR_LENGKAP.value,
+                terlambat_menit=30,
+                pulang_cepat_menit=30,
+                is_working_day=True,
+            )
+            session.add(daily)
+            session.commit()
+
+            ded = DeductionCalculationService.calculate_daily_deduction(daily.id, session=session)
+            self.assertEqual(ded.deduction_late, 7500)
+            self.assertEqual(ded.deduction_early_leave, 10000)
+            self.assertEqual(ded.total_deduction, 17500)
+            self.assertEqual(len(ded.items), 2)
+
+    # KASUS 9: Hari Libur / Akhir Pekan (Rp0)
+    def test_09_hari_libur_akhir_pekan_tidak_dipotong(self):
+        with self.SessionFactory() as session:
+            daily = AttendanceDaily(
+                employee_id="EMP001",
+                employee_name="Ahmad Fauzi",
+                attendance_date=date(2026, 8, 5),  # Tanggal 5 adalah hari libur di seed data
+                scheduled_in=None,
+                scheduled_out=None,
+                actual_check_in=None,
+                actual_check_out=None,
+                check_in_status=CheckScanStatus.ON_TIME.value,
+                check_out_status=CheckScanStatus.ON_TIME.value,
+                attendance_status=AttendanceStatus.LIBUR.value,
+                is_working_day=False,
+            )
+            session.add(daily)
+            session.commit()
+
+            ded = DeductionCalculationService.calculate_daily_deduction(daily.id, session=session)
+            self.assertEqual(ded.total_deduction, 0)
+
+    # KASUS 10: Karyawan Non-Aktif (Diabaikan)
+    def test_10_karyawan_non_aktif_diabaikan(self):
+        with self.SessionFactory() as session:
+            daily = AttendanceDaily(
+                employee_id="EMP003",  # Citra Lestari (NON_AKTIF)
+                employee_name="Citra Lestari",
+                attendance_date=date(2026, 8, 1),
+                is_working_day=True,
+            )
+            session.add(daily)
+            session.commit()
+
+            ded = DeductionCalculationService.calculate_daily_deduction(daily.id, session=session)
+            self.assertEqual(ded.total_deduction, 0)
+
+    # KASUS 11: Toleransi Keterlambatan
+    def test_11_toleransi_keterlambatan(self):
+        with self.SessionFactory() as session:
+            # Set toleransi terlambat = 15 menit
+            setting = session.query(Setting).filter(Setting.key == "toleransi_terlambat_menit").first()
+            setting.value = "15"
+            session.commit()
+
+            # Karyawan terlambat 10 menit (masih dalam toleransi 15 menit)
+            daily = AttendanceDaily(
+                employee_id="EMP001",
+                employee_name="Ahmad Fauzi",
+                attendance_date=date(2026, 8, 1),
+                scheduled_in="08:15:00",
+                scheduled_out="16:30:00",
+                actual_check_in="08:25:00",
+                actual_check_out="16:30:00",
+                check_in_status=CheckScanStatus.LATE.value,
+                check_out_status=CheckScanStatus.ON_TIME.value,
+                attendance_status=AttendanceStatus.HADIR_LENGKAP.value,
+                terlambat_menit=10,
+                pulang_cepat_menit=0,
+                is_working_day=True,
+            )
+            session.add(daily)
+            session.commit()
+
+            ded = DeductionCalculationService.calculate_daily_deduction(daily.id, session=session)
+            self.assertEqual(ded.deduction_late, 0)
+            self.assertEqual(ded.total_deduction, 0)
+
+    # KASUS 12: Hitung Ulang (Force Recalculate) tanpa duplikasi
+    def test_12_hitung_ulang_force_recalculate_tanpa_duplikasi(self):
+        with self.SessionFactory() as session:
+            daily = AttendanceDaily(
+                employee_id="EMP001",
+                employee_name="Ahmad Fauzi",
+                attendance_date=date(2026, 8, 1),
+                scheduled_in="08:15:00",
+                scheduled_out="16:30:00",
+                actual_check_in="08:45:00",
+                actual_check_out="16:30:00",
+                check_in_status=CheckScanStatus.LATE.value,
+                check_out_status=CheckScanStatus.ON_TIME.value,
+                attendance_status=AttendanceStatus.HADIR_LENGKAP.value,
+                terlambat_menit=30,
+                is_working_day=True,
+            )
+            session.add(daily)
+            session.commit()
+
+        # Hitung pertama
+        res1 = DeductionCalculationService.calculate_period_deductions(2026, 8, force_recalculate=False)
+        self.assertTrue(res1["success"])
+
+        # Hitung ulang kedua dengan force_recalculate=True
+        res2 = DeductionCalculationService.calculate_period_deductions(2026, 8, force_recalculate=True)
+        self.assertTrue(res2["success"])
+
+        # Pastikan hanya ada 1 baris AttendanceDeduction untuk record harian tersebut
+        with self.SessionFactory() as session:
+            count = session.query(AttendanceDeduction).filter(AttendanceDeduction.attendance_daily_id == daily.id).count()
+            self.assertEqual(count, 1)
+
+    # KASUS 13: Rekap Potongan Bulanan & Subtotal Unit
+    def test_13_rekap_potongan_bulanan_dan_subtotal_unit(self):
+        with self.SessionFactory() as session:
+            d1 = AttendanceDaily(
+                employee_id="EMP001",
+                employee_name="Ahmad Fauzi",
+                attendance_date=date(2026, 8, 1),
+                terlambat_menit=30,
+                is_working_day=True,
                 attendance_status=AttendanceStatus.HADIR_LENGKAP.value,
             )
             d2 = AttendanceDaily(
-                employee_id=2,
-                attendance_date=date(2026, 8, 3),
-                day_name="Senin",
-                actual_check_in=None,     # Rp10.000
-                actual_check_out=None,    # Rp10.000 -> Rp20.000
-                attendance_status=AttendanceStatus.TIDAK_ABSEN.value,
+                employee_id="EMP002",
+                employee_name="Budi Santoso",
+                attendance_date=date(2026, 8, 1),
+                pulang_cepat_menit=30,
+                is_working_day=True,
+                attendance_status=AttendanceStatus.HADIR_LENGKAP.value,
             )
             session.add_all([d1, d2])
             session.commit()
 
-        # Hitung potongan
-        DeductionCalculationService.calculate_and_save_period(year=2026, month=8, user_name="ADMIN")
-        rekap = DeductionCalculationService.get_monthly_recap(year=2026, month=8)
-        total_db = rekap["grand_total"]["total_potongan_keseluruhan"]
-        self.assertEqual(total_db, 37500)  # 17.500 + 20.000 = 37.500
+        DeductionCalculationService.calculate_period_deductions(2026, 8, force_recalculate=True)
+        recap = DeductionCalculationService.get_monthly_deduction_recap(2026, 8)
 
-        # Ekspor Excel
-        excel_path = Path(self.temp_dir.name) / "rekap_test.xlsx"
-        out_excel = ExportService.export_rekap_potongan_excel(rekap, str(excel_path))
-        self.assertTrue(os.path.exists(out_excel))
-        self.assertGreater(os.path.getsize(out_excel), 0)
+        self.assertEqual(len(recap["rows"]), 2)
+        self.assertIn("Keuangan", recap["subtotals_by_unit"])
+        self.assertIn("Sekretariat", recap["subtotals_by_unit"])
+        self.assertEqual(recap["subtotals_by_unit"]["Sekretariat"]["terlambat"], 7500)
+        self.assertEqual(recap["subtotals_by_unit"]["Keuangan"]["pulang_cepat"], 10000)
 
-        # Ekspor PDF
-        pdf_path = Path(self.temp_dir.name) / "rekap_test.pdf"
-        out_pdf = ExportService.export_rekap_potongan_pdf(rekap, "ADMIN_TEST", str(pdf_path))
-        self.assertTrue(os.path.exists(out_pdf))
-        self.assertGreater(os.path.getsize(out_pdf), 0)
-
-    # =========================================================================
-    # TEST 13: Fleksibilitas Konfigurasi Tarif Sistem
-    # =========================================================================
-    def test_13_fleksibilitas_perubahan_tarif_konfigurasi(self):
-        """Jika pengaturan nominal potongan diubah oleh admin, perhitungan baru langsung menggunakan tarif baru."""
-        # Ubah tarif potongan terlambat <= 60 menit menjadi Rp8.000 di tabel setting
-        with self.SessionLocal() as session:
-            setting_obj = session.query(Setting).filter(Setting.setting_key == "potongan_terlambat_sd_1jam").first()
-            if setting_obj:
-                setting_obj.setting_value = "8000"
-            else:
-                session.add(Setting(setting_key="potongan_terlambat_sd_1jam", setting_value="8000"))
+    # KASUS 14: Grand Total Rekapitulasi Potongan
+    def test_14_rekap_grand_total_dan_karyawan_count(self):
+        with self.SessionFactory() as session:
+            d1 = AttendanceDaily(
+                employee_id="EMP001",
+                employee_name="Ahmad Fauzi",
+                attendance_date=date(2026, 8, 1),
+                terlambat_menit=30,
+                is_working_day=True,
+                attendance_status=AttendanceStatus.HADIR_LENGKAP.value,
+            )
+            session.add(d1)
             session.commit()
 
-        # Ambil tarif sistem yang diperbarui
-        rates = DeductionCalculationService.get_system_rates()
-        self.assertEqual(rates["rate_late_lte_60"], 8000)
+        DeductionCalculationService.calculate_period_deductions(2026, 8, force_recalculate=True)
+        recap = DeductionCalculationService.get_monthly_deduction_recap(2026, 8)
+        gt = recap["grand_total"]
 
-        # Jalankan perhitungan harian dengan tarif baru
-        res = DeductionCalculationService.calculate_daily(
-            attendance_date=date(2026, 8, 3),
-            actual_check_in="08:30",  # Terlambat 15 menit
-            actual_check_out="16:30",
-            calendar=self.cal_senin,
-            custom_rates=rates,
-        )
-        self.assertEqual(res["late_minutes"], 15)
-        self.assertEqual(res["deduction_late"], 8000)
-        self.assertEqual(res["total_deduction"], 8000)
+        self.assertEqual(gt["total_potongan"], 7500)
+        self.assertEqual(gt["terlambat"], 7500)
+        self.assertEqual(gt["karyawan_count"], 1)
+
+    # KASUS 15: Laporan Detail Absensi Harian & Filter
+    def test_15_laporan_detail_harian_dan_filter(self):
+        with self.SessionFactory() as session:
+            d1 = AttendanceDaily(
+                employee_id="EMP001",
+                employee_name="Ahmad Fauzi",
+                attendance_date=date(2026, 8, 1),
+                scheduled_in="08:15:00",
+                scheduled_out="16:30:00",
+                actual_check_in="08:45:00",
+                actual_check_out="16:30:00",
+                check_in_status=CheckScanStatus.LATE.value,
+                check_out_status=CheckScanStatus.ON_TIME.value,
+                attendance_status=AttendanceStatus.HADIR_LENGKAP.value,
+                terlambat_menit=30,
+                is_working_day=True,
+            )
+            session.add(d1)
+            session.commit()
+
+        DeductionCalculationService.calculate_period_deductions(2026, 8, force_recalculate=True)
+        rep = DeductionCalculationService.get_daily_deduction_report(2026, 8, unit="Sekretariat")
+
+        self.assertEqual(rep["total_records"], 1)
+        rec = rep["records"][0]
+        self.assertEqual(rec["nama"], "Ahmad Fauzi")
+        self.assertEqual(rec["potongan_terlambat"], 7500)
+        self.assertEqual(rec["total_potongan_per_hari"], 7500)
+
+    # KASUS 16: Validasi Integritas Data (Anti-negatif, konsistensi)
+    def test_16_validasi_integritas_anti_negatif_dan_konsistensi(self):
+        with self.SessionFactory() as session:
+            d1 = AttendanceDaily(
+                employee_id="EMP001",
+                employee_name="Ahmad Fauzi",
+                attendance_date=date(2026, 8, 1),
+                terlambat_menit=30,
+                is_working_day=True,
+                attendance_status=AttendanceStatus.HADIR_LENGKAP.value,
+            )
+            session.add(d1)
+            session.commit()
+
+        DeductionCalculationService.calculate_period_deductions(2026, 8, force_recalculate=True)
+        val = DeductionCalculationService.validate_deductions_integrity(2026, 8)
+
+        self.assertTrue(val["is_valid"])
+        self.assertEqual(len(val["issues"]), 0)
+        self.assertEqual(val["calculated_total"], 7500)
+
+    # KASUS 17: Layanan Export Excel & PDF
+    def test_17_export_excel_dan_pdf_service(self):
+        with self.SessionFactory() as session:
+            d1 = AttendanceDaily(
+                employee_id="EMP001",
+                employee_name="Ahmad Fauzi",
+                attendance_date=date(2026, 8, 1),
+                terlambat_menit=30,
+                is_working_day=True,
+                attendance_status=AttendanceStatus.HADIR_LENGKAP.value,
+            )
+            session.add(d1)
+            session.commit()
+
+        DeductionCalculationService.calculate_period_deductions(2026, 8, force_recalculate=True)
+
+        # Test Export Rekap Excel
+        excel_recap = ExportService.export_rekap_potongan_excel(2026, 8)
+        self.assertTrue(os.path.exists(excel_recap))
+        self.assertGreater(os.path.getsize(excel_recap), 1000)
+
+        # Test Export Rekap PDF
+        pdf_recap = ExportService.export_rekap_potongan_pdf(2026, 8)
+        self.assertTrue(os.path.exists(pdf_recap))
+        self.assertGreater(os.path.getsize(pdf_recap), 1000)
+
+        # Test Export Detail Excel
+        excel_detail = ExportService.export_detail_absensi_excel(2026, 8)
+        self.assertTrue(os.path.exists(excel_detail))
+        self.assertGreater(os.path.getsize(excel_detail), 1000)
+
+        # Test Export Detail PDF
+        pdf_detail = ExportService.export_detail_absensi_pdf(2026, 8)
+        self.assertTrue(os.path.exists(pdf_detail))
+        self.assertGreater(os.path.getsize(pdf_detail), 1000)
 
 
 if __name__ == "__main__":

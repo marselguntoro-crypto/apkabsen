@@ -320,7 +320,7 @@ class AttendanceDaily(Base):
     calendar = relationship("WorkCalendar", back_populates="daily_attendances")
     raw_in = relationship("AttendanceRaw", foreign_keys=[source_raw_in_id])
     raw_out = relationship("AttendanceRaw", foreign_keys=[source_raw_out_id])
-    deduction = relationship("AttendanceDeduction", back_populates="attendance_daily", uselist=False, cascade="all, delete-orphan")
+    deduction = relationship("AttendanceDeduction", uselist=False, back_populates="attendance_daily", cascade="all, delete-orphan")
 
     __table_args__ = (
         UniqueConstraint("employee_id", "attendance_date", name="uq_emp_attendance_date"),
@@ -357,6 +357,15 @@ class AttendanceDaily(Base):
 
     def to_dict(self) -> dict:
         """Konversi objek AttendanceDaily ke representasi dictionary."""
+        # Nilai kalkulasi potongan jika ada relasi
+        late_min = self.deduction.late_minutes if self.deduction else int(self.terlambat_menit or 0)
+        early_min = self.deduction.early_leave_minutes if self.deduction else int(self.pulang_cepat_menit or 0)
+        pot_late = self.deduction.deduction_late if self.deduction else int(self.potongan_masuk or 0)
+        pot_early = self.deduction.deduction_early_leave if self.deduction else int(self.potongan_pulang or 0)
+        pot_miss_in = self.deduction.deduction_missing_check_in if self.deduction else 0
+        pot_miss_out = self.deduction.deduction_missing_check_out if self.deduction else 0
+        tot_pot = self.deduction.total_deduction if self.deduction else int(self.total_potongan or 0)
+
         return {
             "id": self.id,
             "employee_id": self.employee_id,
@@ -377,6 +386,19 @@ class AttendanceDaily(Base):
             "check_in_status": self.check_in_status,
             "check_out_status": self.check_out_status,
             "attendance_status": self.attendance_status,
+            "late_minutes": late_min,
+            "early_leave_minutes": early_min,
+            "terlambat_menit": late_min,
+            "pulang_cepat_menit": early_min,
+            "deduction_late": pot_late,
+            "deduction_early_leave": pot_early,
+            "deduction_missing_check_in": pot_miss_in,
+            "deduction_missing_check_out": pot_miss_out,
+            "total_deduction": tot_pot,
+            "potongan_masuk": pot_late,
+            "potongan_pulang": pot_early,
+            "potongan_tidak_hadir": pot_miss_in + pot_miss_out,
+            "total_potongan": tot_pot,
             "has_incomplete_scan": self.has_incomplete_scan,
             "has_conflict": self.has_conflict,
             "is_manually_adjusted": self.is_manually_adjusted,
@@ -390,6 +412,109 @@ class AttendanceDaily(Base):
         return f"<AttendanceDaily emp_id={self.employee_id} date={self.attendance_date} status={self.attendance_status}>"
 
 
+class AttendanceDeduction(Base):
+    """
+    Tabel Rincian Potongan Absensi (attendance_deductions).
+    Menampung kalkulasi resmi potongan presensi per karyawan per hari kerja.
+    Semua nominal disimpan dalam integer Rupiah (tanpa float).
+    """
+    __tablename__ = "attendance_deductions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    attendance_daily_id = Column(Integer, ForeignKey("attendance_daily.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
+    employee_id = Column(Integer, ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
+    attendance_date = Column(Date, nullable=False, index=True)
+
+    # Durasi Pelanggaran Waktu
+    late_minutes = Column(Integer, default=0, nullable=False)
+    early_leave_minutes = Column(Integer, default=0, nullable=False)
+
+    # Nominal Komponen Potongan (Integer Rupiah)
+    deduction_late = Column(Integer, default=0, nullable=False)
+    deduction_early_leave = Column(Integer, default=0, nullable=False)
+    deduction_missing_check_in = Column(Integer, default=0, nullable=False)
+    deduction_missing_check_out = Column(Integer, default=0, nullable=False)
+    total_deduction = Column(Integer, default=0, nullable=False)
+
+    # Metadata Perhitungan & Audit Trail
+    calculation_version = Column(String(50), default="1.0.0", nullable=False)
+    calculated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    calculated_by = Column(String(100), default="SYSTEM", nullable=True)
+    notes = Column(Text, nullable=True)
+
+    # Relasi
+    attendance_daily = relationship("AttendanceDaily", back_populates="deduction")
+    employee = relationship("Employee", back_populates="deductions")
+    items = relationship("AttendanceDeductionItem", back_populates="attendance_deduction", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint("employee_id", "attendance_date", name="uq_emp_deduction_date"),
+        Index("idx_deduction_emp_date", "employee_id", "attendance_date"),
+        Index("idx_deduction_total", "total_deduction"),
+    )
+
+    def to_dict(self) -> dict:
+        """Konversi data potongan ke dictionary."""
+        return {
+            "id": self.id,
+            "attendance_daily_id": self.attendance_daily_id,
+            "employee_id": self.employee_id,
+            "emp_num": self.employee.emp_num if self.employee else "-",
+            "nama": self.employee.nama if self.employee else "-",
+            "unit": self.employee.unit if self.employee else "-",
+            "attendance_date": self.attendance_date.strftime("%Y-%m-%d") if self.attendance_date else "",
+            "late_minutes": self.late_minutes,
+            "early_leave_minutes": self.early_leave_minutes,
+            "deduction_late": self.deduction_late,
+            "deduction_early_leave": self.deduction_early_leave,
+            "deduction_missing_check_in": self.deduction_missing_check_in,
+            "deduction_missing_check_out": self.deduction_missing_check_out,
+            "total_deduction": self.total_deduction,
+            "calculation_version": self.calculation_version,
+            "calculated_at": self.calculated_at.strftime("%Y-%m-%d %H:%M:%S") if self.calculated_at else "-",
+            "calculated_by": self.calculated_by or "-",
+            "notes": self.notes or "",
+            "items": [item.to_dict() for item in self.items] if self.items else [],
+        }
+
+    def __repr__(self) -> str:
+        return f"<AttendanceDeduction emp_id={self.employee_id} date={self.attendance_date} total={self.total_deduction}>"
+
+
+class AttendanceDeductionItem(Base):
+    """
+    Tabel Rincian Item Komponen Potongan (attendance_deduction_items).
+    Merekam setiap pemotongan spesifik secara transparan dan terisolasi.
+    Jenis: LATE_UNDER_OR_EQUAL_60, LATE_OVER_60, EARLY_LEAVE, MISSING_CHECK_IN, MISSING_CHECK_OUT.
+    """
+    __tablename__ = "attendance_deduction_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    attendance_deduction_id = Column(Integer, ForeignKey("attendance_deductions.id", ondelete="CASCADE"), nullable=False, index=True)
+    deduction_type = Column(String(50), nullable=False, index=True)
+    description = Column(String(255), nullable=False)
+    amount = Column(Integer, default=0, nullable=False)
+    calculation_reference = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relasi
+    attendance_deduction = relationship("AttendanceDeduction", back_populates="items")
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "attendance_deduction_id": self.attendance_deduction_id,
+            "deduction_type": self.deduction_type,
+            "description": self.description,
+            "amount": self.amount,
+            "calculation_reference": self.calculation_reference or "-",
+            "created_at": self.created_at.strftime("%Y-%m-%d %H:%M:%S") if self.created_at else "-",
+        }
+
+    def __repr__(self) -> str:
+        return f"<AttendanceDeductionItem type={self.deduction_type} amount={self.amount}>"
+
+
 class Setting(Base):
     """
     Tabel Penyimpanan Konfigurasi Sistem (Target Hari Kerja, Jam Operasional, Tarif Potongan).
@@ -399,7 +524,6 @@ class Setting(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     setting_key = Column(String(100), unique=True, nullable=False, index=True)
     setting_value = Column(Text, nullable=False)
-    setting_type = Column(String(50), nullable=True, default="str")
     description = Column(String(255), nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -465,67 +589,3 @@ class AuditLog(Base):
 
     def __repr__(self) -> str:
         return f"<AuditLog action='{self.action}' module='{self.module}' created_at={self.created_at}>"
-
-
-class AttendanceDeduction(Base):
-    """
-    Tabel Rincian Potongan Absensi Harian (attendance_deductions) - Tahap 5.
-    Menyimpan rincian keterlambatan, pulang cepat, tidak absen masuk/pulang,
-    dan total nominal potongan dalam integer Rupiah (mencegah floating point error).
-    Dilengkapi unique constraint untuk mencegah double counting.
-    """
-    __tablename__ = "attendance_deductions"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    attendance_daily_id = Column(Integer, ForeignKey("attendance_daily.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
-    employee_id = Column(Integer, ForeignKey("employees.id", ondelete="CASCADE"), nullable=False, index=True)
-    attendance_date = Column(Date, nullable=False, index=True)
-
-    late_minutes = Column(Integer, default=0, nullable=False)
-    early_leave_minutes = Column(Integer, default=0, nullable=False)
-
-    deduction_late = Column(Integer, default=0, nullable=False)               # Nominal Rp integer
-    deduction_early_leave = Column(Integer, default=0, nullable=False)        # Nominal Rp integer
-    deduction_missing_check_in = Column(Integer, default=0, nullable=False)   # Nominal Rp integer
-    deduction_missing_check_out = Column(Integer, default=0, nullable=False)  # Nominal Rp integer
-    total_deduction = Column(Integer, default=0, nullable=False)              # Nominal Rp integer (Sum of above)
-
-    calculation_version = Column(String(50), default="1.0.0", nullable=False)
-    calculated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    calculated_by = Column(String(100), default="SYSTEM", nullable=True)
-    notes = Column(Text, nullable=True)
-
-    # Relasi
-    attendance_daily = relationship("AttendanceDaily", back_populates="deduction")
-    employee = relationship("Employee", back_populates="deductions")
-
-    __table_args__ = (
-        UniqueConstraint("attendance_daily_id", name="uq_deduction_daily_id"),
-        UniqueConstraint("employee_id", "attendance_date", name="uq_deduction_emp_date"),
-        Index("idx_deduction_emp_date", "employee_id", "attendance_date"),
-        Index("idx_deduction_date", "attendance_date"),
-    )
-
-    def to_dict(self) -> dict:
-        """Konversi objek AttendanceDeduction ke representasi dictionary."""
-        return {
-            "id": self.id,
-            "attendance_daily_id": self.attendance_daily_id,
-            "employee_id": self.employee_id,
-            "attendance_date": self.attendance_date.strftime("%Y-%m-%d") if self.attendance_date else "",
-            "late_minutes": self.late_minutes,
-            "early_leave_minutes": self.early_leave_minutes,
-            "deduction_late": self.deduction_late,
-            "deduction_early_leave": self.deduction_early_leave,
-            "deduction_missing_check_in": self.deduction_missing_check_in,
-            "deduction_missing_check_out": self.deduction_missing_check_out,
-            "total_deduction": self.total_deduction,
-            "calculation_version": self.calculation_version,
-            "calculated_at": self.calculated_at.strftime("%Y-%m-%d %H:%M:%S") if self.calculated_at else "-",
-            "calculated_by": self.calculated_by or "-",
-            "notes": self.notes or "",
-        }
-
-    def __repr__(self) -> str:
-        return f"<AttendanceDeduction emp_id={self.employee_id} date={self.attendance_date} total={self.total_deduction}>"
-

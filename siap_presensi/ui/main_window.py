@@ -25,7 +25,8 @@ from ui.import_module_page import ImportModulePage
 from ui.raw_attendance_page import RawAttendancePage
 from ui.attendance_hub_page import AttendanceHubPage
 from ui.calendar_page import CalendarPage
-from ui.deduction_page import DeductionPage
+from ui.deduction_calculation_page import DeductionCalculationPage
+from ui.reports_hub_page import ReportsHubPage
 from ui.settings_page import SettingsPage
 from ui.backup_page import BackupPage
 from ui.placeholder_page import PlaceholderPage
@@ -58,7 +59,6 @@ class MainWindow(QMainWindow):
         self.sidebar = Sidebar(user_role=self.user.role, parent=self)
         self.sidebar.menu_selected.connect(self._on_navigation)
         self.sidebar.logout_requested.connect(self._on_logout_requested)
-        self.sidebar.about_requested.connect(self._show_about_dialog)
         root_layout.addWidget(self.sidebar)
 
         # 2. Area Konten Kanan: Header Atas + Stacked Pages
@@ -81,19 +81,21 @@ class MainWindow(QMainWindow):
         self.page_import = ImportModulePage(self, user=self.user)
         self.page_absensi = AttendanceHubPage(self, user=self.user)
         self.page_kalender = CalendarPage(self, user=self.user)
-        self.page_potongan = DeductionPage(self, user=self.user)
+        self.page_potongan = DeductionCalculationPage(self, user=self.user)
+        self.page_laporan = ReportsHubPage(self, user=self.user)
         self.page_settings = SettingsPage(self)
         self.page_backup = BackupPage(self)
 
-        # Tambahkan ke Stack sesuai index (0 s/d 7)
+        # Tambahkan ke Stack sesuai index (0 s/d 8)
         self.stack.addWidget(self.page_dashboard)   # Index 0
         self.stack.addWidget(self.page_karyawan)    # Index 1
         self.stack.addWidget(self.page_import)      # Index 2
         self.stack.addWidget(self.page_absensi)     # Index 3
         self.stack.addWidget(self.page_kalender)    # Index 4
         self.stack.addWidget(self.page_potongan)    # Index 5
-        self.stack.addWidget(self.page_settings)    # Index 6
-        self.stack.addWidget(self.page_backup)      # Index 7
+        self.stack.addWidget(self.page_laporan)     # Index 6
+        self.stack.addWidget(self.page_settings)    # Index 7
+        self.stack.addWidget(self.page_backup)      # Index 8
 
         content_layout.addWidget(self.stack)
         root_layout.addWidget(content_container)
@@ -152,40 +154,13 @@ class MainWindow(QMainWindow):
         """)
         user_info_box.addWidget(name_lbl)
 
-        # Tombol Tentang Aplikasi
-        about_btn = QPushButton("ℹ️ Tentang")
-        about_btn.setCursor(Qt.PointingHandCursor)
-        about_btn.setFixedHeight(30)
-        about_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: #f1f5f9;
-                color: {THEME['NAVY_DARK']};
-                border: 1px solid {THEME['BORDER']};
-                border-radius: 4px;
-                padding: 0 10px;
-                font-size: 11px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background-color: #e2e8f0;
-            }}
-        """)
-        about_btn.clicked.connect(self._show_about_dialog)
-        user_info_box.addWidget(about_btn)
-
         h_layout.addLayout(user_info_box)
         return header
 
-    def _show_about_dialog(self):
-        """Menampilkan dialog informasi Tentang Aplikasi SIAP."""
-        from ui.dialogs.about_dialog import AboutDialog
-        dlg = AboutDialog(self)
-        dlg.exec()
-
     def _on_navigation(self, page_index: int, menu_key: str):
         """Menangani perpindahan halaman antar menu."""
-        # Proteksi halaman khusus Admin
-        if (page_index == 6 or page_index == 7) and self.user.role != UserRole.ADMIN:
+        # Proteksi halaman khusus Admin (Index 7: Pengaturan, Index 8: Backup)
+        if (page_index == 7 or page_index == 8) and self.user.role != UserRole.ADMIN:
             QMessageBox.warning(self, "Akses Ditolak", "Halaman ini hanya dapat diakses oleh Administrator.")
             return
 
@@ -198,9 +173,10 @@ class MainWindow(QMainWindow):
             2: "Import Berkas Absensi Mesin",
             3: "Data Transaksi Absensi (Mentah & Harian)",
             4: "Kalender Kerja & Jam Operasional",
-            5: "Laporan & Rekapitulasi Potongan",
-            6: "Pengaturan Sistem & Parameter",
-            7: "Pencadangan Database (Backup)",
+            5: "Perhitungan Potongan Absensi",
+            6: "Laporan & Rekapitulasi Presensi",
+            7: "Pengaturan Sistem & Parameter",
+            8: "Pencadangan Database (Backup)",
         }
         self.breadcrumb_lbl.setText(titles.get(page_index, "SIAP"))
 
@@ -215,7 +191,10 @@ class MainWindow(QMainWindow):
         elif page_index == 4:
             self.page_kalender.refresh_calendar()
         elif page_index == 5:
-            self.page_potongan.refresh_all()
+            self.page_potongan.load_preview_data()
+        elif page_index == 6:
+            self.page_laporan.refresh_recap()
+            self.page_laporan.refresh_daily()
 
     def _on_logout_requested(self):
         """Konfirmasi logout pengguna."""

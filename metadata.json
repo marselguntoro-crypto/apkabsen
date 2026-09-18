@@ -1,6 +1,6 @@
 {
   "name": "SIAP - Presensi Desktop",
-  "description": "Sistem Informasi Administrasi Presensi - Aplikasi Desktop Windows Berbasis PySide6 & SQLite (Tahap 6: Finalisasi Aplikasi, Build Executable .EXE & Installer Windows)",
+  "description": "Sistem Informasi Administrasi Presensi - Aplikasi Desktop Windows Berbasis PySide6 & SQLite (Tahap 5: Mesin Potongan Absensi, Rekap Laporan & Installer)",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

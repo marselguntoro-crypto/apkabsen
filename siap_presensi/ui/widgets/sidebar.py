@@ -78,9 +78,10 @@ class Sidebar(QFrame):
             (2, "import", "Import Absensi", "📥", False),
             (3, "absensi", "Data Absensi", "🕒", False),
             (4, "kalender", "Kalender Kerja", "📅", False),
-            (5, "laporan", "Laporan & Rekap", "📋", False),
-            (6, "pengaturan", "Pengaturan Sistem", "⚙️", True),   # Khusus Admin
-            (7, "backup", "Backup Database", "💾", True),        # Khusus Admin
+            (5, "potongan", "Perhitungan Potongan", "💰", False),
+            (6, "laporan", "Laporan & Rekap", "📋", False),
+            (7, "pengaturan", "Pengaturan Sistem", "⚙️", True),   # Khusus Admin
+            (8, "backup", "Backup Database", "💾", True),        # Khusus Admin
         ]
 
         # Buat Tombol Menu

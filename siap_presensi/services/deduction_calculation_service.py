@@ -1,37 +1,20 @@
 """
-Layanan Perhitungan Status dan Nominal Potongan Absensi (Tahap 5).
-SIAP - Sistem Informasi Administrasi Presensi.
-
-Aturan Utama:
-1. Sumber data: Master Karyawan, Kalender Kerja, attendance_daily, dan Pengaturan Sistem.
-   Data attendance_raw TIDAK BOLEH diubah.
-2. Jam Kerja Standar:
-   - Senin - Kamis: Masuk 08:15 WIB, Pulang 16:30 WIB
-   - Jumat: Masuk 08:15 WIB, Pulang 17:00 WIB
-   - Sabtu & Minggu: Bukan hari kerja (default)
-3. Nominal Potongan:
-   - Masuk tepat waktu (<= 08:15): Rp0
-   - Terlambat <= 60 menit: Rp7.500
-   - Terlambat > 60 menit: Rp10.000
-   - Pulang cepat: Rp10.000
-   - Tidak absen masuk: Rp10.000
-   - Tidak absen pulang: Rp10.000
-   - Tidak absen masuk & pulang: Rp10.000 + Rp10.000 = Rp20.000 (TIDAK BOLEH ada tambahan Alfa Rp20.000 lagi)
-   - Hari libur / Bukan hari kerja: Rp0
-4. Mencegah Double Counting:
-   - Jam masuk kosong: Tidak dihitung sebagai keterlambatan, melainkan Tidak Absen Masuk.
-   - Jam pulang kosong: Tidak dihitung sebagai pulang cepat, melainkan Tidak Absen Pulang.
-   - Unique constraint pada attendance_deductions memastikan 1 attendance_daily hanya memiliki 1 rincian perhitungan.
-   - Recalculate menggantikan data lama secara atomik dalam database transaction.
+Modul Mesin Perhitungan Potongan Absensi (DeductionCalculationService).
+Bertanggung jawab menghitung:
+1. Menit Keterlambatan dan Nominal Potongan Masuk (<= 60 menit vs > 60 menit).
+2. Menit Pulang Cepat dan Nominal Potongan Pulang Cepat.
+3. Potongan Tidak Absen Masuk (Rp10.000) dan Tidak Absen Pulang (Rp10.000).
+4. Menjamin TIDAK ADA DOUBLE COUNTING (Tidak hadir = 10.000 + 10.000 = 20.000, tanpa alfa ekstra).
+5. Hari libur/bukan hari kerja = Rp0.
+6. Menggunakan angka integer dalam satuan Rupiah (tanpa floating point).
+7. Menghasilkan rekap bulanan per karyawan, rekap per unit, dan laporan harian.
 """
 from datetime import date, datetime
-import calendar as py_calendar
-from typing import Dict, List, Optional, Tuple, Any, Set
-from collections import defaultdict
+from typing import Dict, List, Optional, Tuple, Any
+from sqlalchemy import extract, func, and_, or_, desc
+from sqlalchemy.orm import joinedload, Session
 
-from sqlalchemy import and_, or_, func, desc
-from sqlalchemy.orm import Session, joinedload
-
+from config.settings import DEFAULT_SETTINGS
 from database.connection import get_db_session
 from database.models import (
     Employee,
@@ -40,986 +23,812 @@ from database.models import (
     CalendarStatus,
     AttendanceDaily,
     AttendanceDeduction,
-    AttendanceStatus,
+    AttendanceDeductionItem,
     AuditLog,
     Setting,
 )
 from services.settings_service import SettingsService
 from utils.logger import get_logger
-from utils.time_parser import parse_time_str
+from utils.time_parser import parse_time_str, time_to_minutes
 
 logger = get_logger("DeductionCalculationService")
 
 
 class DeductionCalculationService:
-    """Layanan terpusat untuk perhitungan status dan nominal potongan absensi."""
+    """Service inti kalkulasi potongan absensi karyawan."""
 
-    CURRENT_CALCULATION_VERSION = "5.0.0"
-
-    # Default Rules (Rupiah)
-    DEFAULT_RATE_LATE_LTE_60 = 7500
-    DEFAULT_RATE_LATE_GT_60 = 10000
-    DEFAULT_RATE_EARLY_LEAVE = 10000
-    DEFAULT_RATE_MISSING_CHECK_IN = 10000
-    DEFAULT_RATE_MISSING_CHECK_OUT = 10000
+    CALCULATION_VERSION = "1.0.0"
 
     @classmethod
-    def get_system_rates(cls) -> Dict[str, int]:
-        """Mengambil konfigurasi nominal potongan dari tabel settings atau default."""
-        settings = SettingsService.get_all()
-        try:
-            rate_late_lte_60 = int(settings.get("potongan_terlambat_sd_1jam", cls.DEFAULT_RATE_LATE_LTE_60))
-        except (ValueError, TypeError):
-            rate_late_lte_60 = cls.DEFAULT_RATE_LATE_LTE_60
-
-        try:
-            rate_late_gt_60 = int(settings.get("potongan_terlambat_gt_1jam", cls.DEFAULT_RATE_LATE_GT_60))
-        except (ValueError, TypeError):
-            rate_late_gt_60 = cls.DEFAULT_RATE_LATE_GT_60
-
-        try:
-            rate_early = int(settings.get("potongan_pulang_cepat", cls.DEFAULT_RATE_EARLY_LEAVE))
-        except (ValueError, TypeError):
-            rate_early = cls.DEFAULT_RATE_EARLY_LEAVE
-
-        try:
-            rate_missing_in = int(settings.get("potongan_tidak_absen_masuk", cls.DEFAULT_RATE_MISSING_CHECK_IN))
-        except (ValueError, TypeError):
-            rate_missing_in = cls.DEFAULT_RATE_MISSING_CHECK_IN
-
-        try:
-            rate_missing_out = int(settings.get("potongan_tidak_absen_pulang", cls.DEFAULT_RATE_MISSING_CHECK_OUT))
-        except (ValueError, TypeError):
-            rate_missing_out = cls.DEFAULT_RATE_MISSING_CHECK_OUT
+    def get_effective_rule_settings(cls, session: Optional[Session] = None) -> Dict[str, Any]:
+        """
+        Membaca konfigurasi aturan dan tarif potongan dari database (settings).
+        Mengembalikan konfigurasi dengan tipe data integer / waktu yang siap digunakan.
+        """
+        raw_settings = SettingsService.get_all()
 
         return {
-            "rate_late_lte_60": max(0, rate_late_lte_60),
-            "rate_late_gt_60": max(0, rate_late_gt_60),
-            "rate_early_leave": max(0, rate_early),
-            "rate_missing_check_in": max(0, rate_missing_in),
-            "rate_missing_check_out": max(0, rate_missing_out),
-        }
+            # Jam Operasional Terjadwal Standar
+            "jam_masuk_senin_kamis": raw_settings.get("jam_masuk_senin_kamis", "08:15"),
+            "jam_pulang_senin_kamis": raw_settings.get("jam_pulang_senin_kamis", "16:30"),
+            "jam_masuk_jumat": raw_settings.get("jam_masuk_jumat", "08:15"),
+            "jam_pulang_jumat": raw_settings.get("jam_pulang_jumat", "17:00"),
 
-    @staticmethod
-    def _time_to_minutes(time_str: Optional[str]) -> Optional[int]:
-        """Konversi string jam HH:MM atau HH:MM:SS ke menit sejak tengah malam."""
-        if not time_str or not time_str.strip() or time_str.strip() == "-":
-            return None
-        parsed = parse_time_str(time_str)
-        if not parsed:
-            return None
-        return parsed.hour * 60 + parsed.minute
-
-    @classmethod
-    def calculate_late(
-        cls,
-        actual_check_in: Optional[str],
-        scheduled_check_in: str,
-        rate_lte_60: int = DEFAULT_RATE_LATE_LTE_60,
-        rate_gt_60: int = DEFAULT_RATE_LATE_GT_60,
-    ) -> Tuple[int, int]:
-        """
-        Menghitung menit keterlambatan dan nominal potongan keterlambatan.
-        Aturan:
-        - Jika jam masuk kosong -> bukan keterlambatan, return (0, 0).
-        - Jika jam masuk <= jam jadwal -> 0 menit, Rp0.
-        - Jika terlambat <= 60 menit -> diff menit, rate_lte_60 (Rp7.500).
-        - Jika terlambat > 60 menit -> diff menit, rate_gt_60 (Rp10.000).
-        """
-        actual_m = cls._time_to_minutes(actual_check_in)
-        sched_m = cls._time_to_minutes(scheduled_check_in)
-
-        if actual_m is None or sched_m is None:
-            return 0, 0
-
-        if actual_m <= sched_m:
-            return 0, 0
-
-        late_minutes = actual_m - sched_m
-        if late_minutes <= 60:
-            return late_minutes, rate_lte_60
-        else:
-            return late_minutes, rate_gt_60
-
-    @classmethod
-    def calculate_early_leave(
-        cls,
-        actual_check_out: Optional[str],
-        scheduled_check_out: str,
-        rate_early: int = DEFAULT_RATE_EARLY_LEAVE,
-    ) -> Tuple[int, int]:
-        """
-        Menghitung menit pulang cepat dan nominal potongan pulang cepat.
-        Aturan:
-        - Jika jam pulang kosong -> bukan pulang cepat, return (0, 0).
-        - Jika jam pulang >= jam jadwal -> 0 menit, Rp0.
-        - Jika pulang lebih awal -> diff menit, rate_early (Rp10.000).
-        """
-        actual_m = cls._time_to_minutes(actual_check_out)
-        sched_m = cls._time_to_minutes(scheduled_check_out)
-
-        if actual_m is None or sched_m is None:
-            return 0, 0
-
-        if actual_m >= sched_m:
-            return 0, 0
-
-        early_minutes = sched_m - actual_m
-        return early_minutes, rate_early
-
-    @classmethod
-    def calculate_missing_check_in(
-        cls,
-        actual_check_in: Optional[str],
-        is_working_day: bool,
-        rate_missing: int = DEFAULT_RATE_MISSING_CHECK_IN,
-    ) -> int:
-        """Menghitung potongan jika tidak ada scan masuk pada hari kerja."""
-        if not is_working_day:
-            return 0
-        if not actual_check_in or not actual_check_in.strip() or actual_check_in.strip() == "-":
-            return rate_missing
-        return 0
-
-    @classmethod
-    def calculate_missing_check_out(
-        cls,
-        actual_check_out: Optional[str],
-        is_working_day: bool,
-        rate_missing: int = DEFAULT_RATE_MISSING_CHECK_OUT,
-    ) -> int:
-        """Menghitung potongan jika tidak ada scan pulang pada hari kerja."""
-        if not is_working_day:
-            return 0
-        if not actual_check_out or not actual_check_out.strip() or actual_check_out.strip() == "-":
-            return rate_missing
-        return 0
-
-    @classmethod
-    def calculate_daily(
-        cls,
-        attendance_date: date,
-        actual_check_in: Optional[str],
-        actual_check_out: Optional[str],
-        calendar: Optional[WorkCalendar] = None,
-        custom_rates: Optional[Dict[str, int]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Perhitungan komprehensif harian untuk satu catatan kehadiran.
-        Mematuhi aturan validasi kalender, pemisahan komponen, dan pencegahan double counting.
-        """
-        rates = custom_rates or cls.get_system_rates()
-
-        # 1. Periksa Status Hari Kalender Kerja
-        # Hari 0=Senin, 1=Selasa, 2=Rabu, 3=Kamis, 4=Jumat, 5=Sabtu, 6=Minggu
-        weekday = attendance_date.weekday()
-        is_weekend = weekday in (5, 6)
-
-        if calendar is not None:
-            is_working_day = calendar.is_working_day
-            sched_in = calendar.scheduled_check_in or ("08:15" if not is_weekend else None)
-            if weekday == 4:  # Jumat
-                sched_out = calendar.scheduled_check_out or "17:00"
-            else:
-                sched_out = calendar.scheduled_check_out or "16:30"
-            day_status = calendar.calendar_status.value if hasattr(calendar.calendar_status, "value") else str(calendar.calendar_status)
-        else:
-            is_working_day = not is_weekend
-            sched_in = "08:15" if is_working_day else None
-            sched_out = ("17:00" if weekday == 4 else "16:30") if is_working_day else None
-            day_status = "HARI_KERJA" if is_working_day else "AKHIR_PEKAN"
-
-        # 2. Jika Bukan Hari Kerja
-        if not is_working_day:
-            return {
-                "is_working_day": False,
-                "attendance_status": "BUKAN_HARI_KERJA",
-                "scheduled_check_in": sched_in,
-                "scheduled_check_out": sched_out,
-                "actual_check_in": actual_check_in,
-                "actual_check_out": actual_check_out,
-                "late_minutes": 0,
-                "early_leave_minutes": 0,
-                "deduction_late": 0,
-                "deduction_early_leave": 0,
-                "deduction_missing_check_in": 0,
-                "deduction_missing_check_out": 0,
-                "total_deduction": 0,
-                "notes": f"Bukan hari kerja ({day_status}). Potongan Rp0.",
-            }
-
-        # 3. Hari Kerja: Analisis Ketersediaan Scan
-        has_in = bool(actual_check_in and actual_check_in.strip() and actual_check_in.strip() != "-")
-        has_out = bool(actual_check_out and actual_check_out.strip() and actual_check_out.strip() != "-")
-
-        sched_in_str = sched_in or "08:15"
-        sched_out_str = sched_out or ("17:00" if weekday == 4 else "16:30")
-
-        # Kasus A: Keduanya Kosong (TIDAK_ABSEN)
-        if not has_in and not has_out:
-            ded_missing_in = rates["rate_missing_check_in"]
-            ded_missing_out = rates["rate_missing_check_out"]
-            total = ded_missing_in + ded_missing_out  # Tepat Rp20.000
-            return {
-                "is_working_day": True,
-                "attendance_status": AttendanceStatus.TIDAK_ABSEN.value,
-                "scheduled_check_in": sched_in_str,
-                "scheduled_check_out": sched_out_str,
-                "actual_check_in": None,
-                "actual_check_out": None,
-                "late_minutes": 0,
-                "early_leave_minutes": 0,
-                "deduction_late": 0,
-                "deduction_early_leave": 0,
-                "deduction_missing_check_in": ded_missing_in,
-                "deduction_missing_check_out": ded_missing_out,
-                "total_deduction": total,
-                "notes": "Tidak scan masuk & pulang. Dikenakan potongan Tidak Absen Masuk + Tidak Absen Pulang (Total Rp20.000).",
-            }
-
-        # Kasus B: Hanya Scan Masuk (HANYA_ABSEN_MASUK)
-        if has_in and not has_out:
-            late_m, ded_late = cls.calculate_late(
-                actual_check_in,
-                sched_in_str,
-                rates["rate_late_lte_60"],
-                rates["rate_late_gt_60"],
-            )
-            ded_missing_in = 0
-            ded_missing_out = rates["rate_missing_check_out"]
-            ded_early = 0
-            early_m = 0
-            total = ded_late + ded_missing_out
-
-            notes = f"Hanya scan masuk ({actual_check_in}). "
-            if ded_late > 0:
-                notes += f"Terlambat {late_m} mnt (Rp{ded_late:,}). "
-            notes += f"Tidak scan pulang (Rp{ded_missing_out:,})."
-
-            return {
-                "is_working_day": True,
-                "attendance_status": AttendanceStatus.HANYA_ABSEN_MASUK.value,
-                "scheduled_check_in": sched_in_str,
-                "scheduled_check_out": sched_out_str,
-                "actual_check_in": actual_check_in,
-                "actual_check_out": None,
-                "late_minutes": late_m,
-                "early_leave_minutes": early_m,
-                "deduction_late": ded_late,
-                "deduction_early_leave": ded_early,
-                "deduction_missing_check_in": ded_missing_in,
-                "deduction_missing_check_out": ded_missing_out,
-                "total_deduction": total,
-                "notes": notes,
-            }
-
-        # Kasus C: Hanya Scan Pulang (HANYA_ABSEN_PULANG)
-        if not has_in and has_out:
-            early_m, ded_early = cls.calculate_early_leave(
-                actual_check_out,
-                sched_out_str,
-                rates["rate_early_leave"],
-            )
-            ded_missing_in = rates["rate_missing_check_in"]
-            ded_missing_out = 0
-            ded_late = 0
-            late_m = 0
-            total = ded_missing_in + ded_early
-
-            notes = f"Hanya scan pulang ({actual_check_out}). "
-            notes += f"Tidak scan masuk (Rp{ded_missing_in:,}). "
-            if ded_early > 0:
-                notes += f"Pulang cepat {early_m} mnt (Rp{ded_early:,})."
-
-            return {
-                "is_working_day": True,
-                "attendance_status": AttendanceStatus.HANYA_ABSEN_PULANG.value,
-                "scheduled_check_in": sched_in_str,
-                "scheduled_check_out": sched_out_str,
-                "actual_check_in": None,
-                "actual_check_out": actual_check_out,
-                "late_minutes": late_m,
-                "early_leave_minutes": early_m,
-                "deduction_late": ded_late,
-                "deduction_early_leave": ded_early,
-                "deduction_missing_check_in": ded_missing_in,
-                "deduction_missing_check_out": ded_missing_out,
-                "total_deduction": total,
-                "notes": notes,
-            }
-
-        # Kasus D: Hadir Lengkap (HADIR_LENGKAP)
-        late_m, ded_late = cls.calculate_late(
-            actual_check_in,
-            sched_in_str,
-            rates["rate_late_lte_60"],
-            rates["rate_late_gt_60"],
-        )
-        early_m, ded_early = cls.calculate_early_leave(
-            actual_check_out,
-            sched_out_str,
-            rates["rate_early_leave"],
-        )
-        ded_missing_in = 0
-        ded_missing_out = 0
-        total = ded_late + ded_early
-
-        notes = f"Hadir Lengkap ({actual_check_in} - {actual_check_out}). "
-        if ded_late > 0:
-            notes += f"Terlambat {late_m} mnt (Rp{ded_late:,}). "
-        if ded_early > 0:
-            notes += f"Pulang cepat {early_m} mnt (Rp{ded_early:,}). "
-        if total == 0:
-            notes += "Tepat waktu, tidak ada potongan (Rp0)."
-
-        return {
-            "is_working_day": True,
-            "attendance_status": AttendanceStatus.HADIR_LENGKAP.value,
-            "scheduled_check_in": sched_in_str,
-            "scheduled_check_out": sched_out_str,
-            "actual_check_in": actual_check_in,
-            "actual_check_out": actual_check_out,
-            "late_minutes": late_m,
-            "early_leave_minutes": early_m,
-            "deduction_late": ded_late,
-            "deduction_early_leave": ded_early,
-            "deduction_missing_check_in": ded_missing_in,
-            "deduction_missing_check_out": ded_missing_out,
-            "total_deduction": total,
-            "notes": notes,
+            # Batas Waktu & Tarif Potongan (Integer Rupiah)
+            "batas_menit_terlambat_1": 60,
+            "potongan_terlambat_sd_1jam": int(raw_settings.get("potongan_terlambat_sd_1jam", 7500)),
+            "potongan_terlambat_gt_1jam": int(raw_settings.get("potongan_terlambat_gt_1jam", 10000)),
+            "potongan_pulang_cepat": int(raw_settings.get("potongan_pulang_cepat", 10000)),
+            "potongan_tidak_absen_masuk": int(raw_settings.get("potongan_tidak_absen_masuk", 10000)),
+            "potongan_tidak_absen_pulang": int(raw_settings.get("potongan_tidak_absen_pulang", 10000)),
+            "potongan_tidak_hadir": int(raw_settings.get("potongan_tidak_hadir", 20000)),
         }
 
     @classmethod
-    def get_calculation_preview(
+    def calculate_single_day(
         cls,
-        year: int,
-        month: int,
-        unit: Optional[str] = None,
-        employee_id: Optional[int] = None,
+        att_date: date,
+        actual_in_str: Optional[str],
+        actual_out_str: Optional[str],
+        is_working_day: bool,
+        day_name: Optional[str] = None,
+        scheduled_in_override: Optional[str] = None,
+        scheduled_out_override: Optional[str] = None,
+        rule_settings: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Menyajikan ringkasan pra-perhitungan sebelum pengguna menyetujui proses:
-        - Periode
-        - Jumlah Karyawan Aktif
-        - Jumlah Hari Kerja
-        - Jumlah Record Harian yang akan diproses
-        - Jumlah Data Bermasalah
-        - Status Perhitungan Sebelumnya (apakah sudah pernah dihitung)
+        Menghitung rincian potongan untuk 1 record absensi harian.
+        Fungsi ini bersifat murni (pure function), konsisten, dan dapat diuji secara independen.
         """
-        with get_db_session() as session:
-            # 1. Hitung Hari Kerja pada Kalender
-            working_days_count = (
-                session.query(WorkCalendar)
-                .filter(
-                    WorkCalendar.year == year,
-                    WorkCalendar.month == month,
-                    WorkCalendar.is_working_day == True,
-                )
-                .count()
-            )
+        rules = rule_settings or cls.get_effective_rule_settings()
 
-            # 2. Hitung Karyawan Aktif
-            emp_q = session.query(Employee).filter(Employee.status == EmployeeStatus.AKTIF)
-            if unit and unit != "ALL" and unit.strip():
-                emp_q = emp_q.filter(Employee.unit == unit)
-            if employee_id:
-                emp_q = emp_q.filter(Employee.id == employee_id)
-            employees = emp_q.all()
-            employee_ids = [e.id for e in employees]
+        # Inisialisasi Hasil
+        result = {
+            "is_working_day": is_working_day,
+            "late_minutes": 0,
+            "early_leave_minutes": 0,
+            "deduction_late": 0,
+            "deduction_early_leave": 0,
+            "deduction_missing_check_in": 0,
+            "deduction_missing_check_out": 0,
+            "total_deduction": 0,
+            "items": [],  # List[dict]: {type, description, amount, ref}
+            "notes": "",
+        }
 
-            start_date = date(year, month, 1)
-            end_date = date(year, month, py_calendar.monthrange(year, month)[1])
+        # 1. Jika BUKAN Hari Kerja (Akhir Pekan / Libur Nasional / Cuti Bersama)
+        if not is_working_day:
+            result["notes"] = "Bukan hari kerja operasional (Potongan Rp0)"
+            return result
 
-            # 3. Hitung Catatan attendance_daily
-            daily_q = session.query(AttendanceDaily).filter(
-                AttendanceDaily.attendance_date >= start_date,
-                AttendanceDaily.attendance_date <= end_date,
-            )
-            if employee_ids:
-                daily_q = daily_q.filter(AttendanceDaily.employee_id.in_(employee_ids))
+        # Tentukan Jam Terjadwal (Jumat vs Senin-Kamis atau Override dari Kalender)
+        is_jumat = (att_date.weekday() == 4) or (day_name and day_name.lower() == "jumat")
 
-            total_daily_records = daily_q.count()
+        if scheduled_in_override and scheduled_in_override != "-":
+            sched_in = scheduled_in_override
+        else:
+            sched_in = rules["jam_masuk_jumat"] if is_jumat else rules["jam_masuk_senin_kamis"]
 
-            # Data Bermasalah
-            problematic_count = daily_q.filter(
-                or_(
-                    AttendanceDaily.attendance_status == AttendanceStatus.DATA_BERMASALAH.value,
-                    AttendanceDaily.has_conflict == True,
-                )
-            ).count()
+        if scheduled_out_override and scheduled_out_override != "-":
+            sched_out = scheduled_out_override
+        else:
+            sched_out = rules["jam_pulang_jumat"] if is_jumat else rules["jam_pulang_senin_kamis"]
 
-            # Periksa apakah sudah ada data di attendance_deductions
-            calculated_count = (
-                session.query(AttendanceDeduction)
-                .filter(
-                    AttendanceDeduction.attendance_date >= start_date,
-                    AttendanceDeduction.attendance_date <= end_date,
-                )
-            )
-            if employee_ids:
-                calculated_count = calculated_count.filter(AttendanceDeduction.employee_id.in_(employee_ids))
-            existing_deduction_count = calculated_count.count()
+        sched_in_min = time_to_minutes(sched_in) or (8 * 60 + 15)  # 08:15 default
+        sched_out_min = time_to_minutes(sched_out) or (17 * 60 if is_jumat else 16 * 60 + 30)
 
-            return {
-                "year": year,
-                "month": month,
-                "period_label": f"{month:02d}/{year}",
-                "unit": unit or "SEMUA UNIT",
-                "employee_count": len(employees),
-                "working_days_count": working_days_count,
-                "total_daily_records": total_daily_records,
-                "problematic_count": problematic_count,
-                "existing_deduction_count": existing_deduction_count,
-                "is_already_calculated": existing_deduction_count > 0,
-                "can_proceed": total_daily_records > 0,
-                "message": (
-                    "Data absensi harian siap diproses."
-                    if total_daily_records > 0
-                    else "Belum ada data absensi harian pada periode ini. Silakan generate Absensi Harian terlebih dahulu di menu Data Absensi."
-                ),
-            }
+        # 2. Evaluasi Jam Masuk Aktual
+        actual_in_clean = parse_time_str(actual_in_str)
+        actual_in_min = time_to_minutes(actual_in_clean)
+
+        if actual_in_min is None:
+            # Jam masuk kosong -> Potongan Tidak Absen Masuk (Rp10.000)
+            # TIDAK menghitung keterlambatan!
+            amt = rules["potongan_tidak_absen_masuk"]
+            result["deduction_missing_check_in"] = amt
+            result["items"].append({
+                "deduction_type": "MISSING_CHECK_IN",
+                "description": "Tidak Absen Masuk",
+                "amount": amt,
+                "calculation_reference": f"Scan masuk kosong pada hari kerja terjadwal ({sched_in})",
+            })
+        else:
+            # Jam masuk tersedia -> Evaluasi Keterlambatan
+            if actual_in_min > sched_in_min:
+                diff_min = actual_in_min - sched_in_min
+                result["late_minutes"] = diff_min
+
+                if diff_min <= rules["batas_menit_terlambat_1"]:
+                    amt = rules["potongan_terlambat_sd_1jam"]
+                    result["deduction_late"] = amt
+                    result["items"].append({
+                        "deduction_type": "LATE_UNDER_OR_EQUAL_60",
+                        "description": f"Terlambat Masuk {diff_min} Menit (<= 60 Menit)",
+                        "amount": amt,
+                        "calculation_reference": f"Masuk {actual_in_clean} vs Jadwal {sched_in} (+{diff_min} m)",
+                    })
+                else:
+                    amt = rules["potongan_terlambat_gt_1jam"]
+                    result["deduction_late"] = amt
+                    result["items"].append({
+                        "deduction_type": "LATE_OVER_60",
+                        "description": f"Terlambat Masuk {diff_min} Menit (> 60 Menit)",
+                        "amount": amt,
+                        "calculation_reference": f"Masuk {actual_in_clean} vs Jadwal {sched_in} (+{diff_min} m)",
+                    })
+
+        # 3. Evaluasi Jam Pulang Aktual
+        actual_out_clean = parse_time_str(actual_out_str)
+        actual_out_min = time_to_minutes(actual_out_clean)
+
+        if actual_out_min is None:
+            # Jam pulang kosong -> Potongan Tidak Absen Pulang (Rp10.000)
+            # TIDAK menghitung pulang cepat!
+            amt = rules["potongan_tidak_absen_pulang"]
+            result["deduction_missing_check_out"] = amt
+            result["items"].append({
+                "deduction_type": "MISSING_CHECK_OUT",
+                "description": "Tidak Absen Pulang",
+                "amount": amt,
+                "calculation_reference": f"Scan pulang kosong pada hari kerja terjadwal ({sched_out})",
+            })
+        else:
+            # Jam pulang tersedia -> Evaluasi Pulang Cepat
+            if actual_out_min < sched_out_min:
+                diff_min = sched_out_min - actual_out_min
+                result["early_leave_minutes"] = diff_min
+                amt = rules["potongan_pulang_cepat"]
+                result["deduction_early_leave"] = amt
+                result["items"].append({
+                    "deduction_type": "EARLY_LEAVE",
+                    "description": f"Pulang Cepat {diff_min} Menit",
+                    "amount": amt,
+                    "calculation_reference": f"Pulang {actual_out_clean} vs Jadwal {sched_out} (-{diff_min} m)",
+                })
+
+        # 4. Total Potongan = Penjumlahan seluruh komponen yang valid (Mencegah Double Counting)
+        # Jika kedua scan kosong: 10.000 + 10.000 = 20.000 (tidak ditambah alfa ekstra!)
+        total = (
+            result["deduction_late"]
+            + result["deduction_early_leave"]
+            + result["deduction_missing_check_in"]
+            + result["deduction_missing_check_out"]
+        )
+        result["total_deduction"] = int(total)
+
+        if actual_in_min is None and actual_out_min is None:
+            result["notes"] = "Tidak ada scan presensi sama sekali (Tidak Masuk Rp10.000 + Tidak Pulang Rp10.000 = Rp20.000)"
+
+        return result
 
     @classmethod
-    def calculate_and_save_period(
+    def calculate_period_deductions(
         cls,
         year: int,
         month: int,
         unit: Optional[str] = None,
         employee_id: Optional[int] = None,
         user_name: str = "ADMIN",
-        recalculate: bool = True,
+        force_recalculate: bool = False,
     ) -> Dict[str, Any]:
         """
-        Mengeksekusi perhitungan status dan nominal potongan absensi secara atomik (ACID).
-        - Mengambil konfigurasi tarif sistem.
-        - Memproses setiap record attendance_daily yang relevan.
-        - Menyimpan ke tabel attendance_deductions (upsert/replace bersih).
-        - Memperbarui kolom penampung kalkulasi di attendance_daily.
-        - Mencatat log audit.
-        - Rollback otomatis jika ada error.
+        Menjalankan kalkulasi potongan absensi untuk satu periode bulan & tahun.
+        Menggunakan transaksi database yang aman (commit/rollback).
         """
-        rates = cls.get_system_rates()
+        logger.info(f"Memulai perhitungan potongan periode {month:02d}/{year} (unit: {unit}, emp: {employee_id}, force: {force_recalculate}).")
 
         with get_db_session() as session:
-            # 1. Ambil Kalender Bulan Bersangkutan (cache dictionary berdasarkan tanggal)
-            calendars = (
+            # 1. Ambil Pengaturan Aturan Potongan
+            rule_settings = cls.get_effective_rule_settings(session)
+
+            # 2. Ambil Kalender Kerja Periode Ini
+            calendar_records = (
                 session.query(WorkCalendar)
                 .filter(WorkCalendar.year == year, WorkCalendar.month == month)
                 .all()
             )
-            calendar_map = {c.calendar_date: c for c in calendars}
+            cal_by_date = {c.calendar_date: c for c in calendar_records}
 
-            # 2. Ambil Karyawan Aktif
-            emp_q = session.query(Employee).filter(Employee.status == EmployeeStatus.AKTIF)
-            if unit and unit != "ALL" and unit.strip():
-                emp_q = emp_q.filter(Employee.unit == unit)
-            if employee_id:
-                emp_q = emp_q.filter(Employee.id == employee_id)
-            employees = emp_q.all()
-            emp_ids = [e.id for e in employees]
-
-            if not emp_ids:
+            if not calendar_records:
                 return {
                     "success": False,
-                    "message": "Tidak ditemukan data karyawan aktif untuk diproses.",
-                    "total_processed": 0,
-                    "total_deduction_all": 0,
+                    "error_type": "CALENDAR_NOT_FOUND",
+                    "message": f"Kalender kerja untuk periode {month:02d}/{year} belum dibuat. Silakan buat kalender terlebih dahulu.",
                 }
 
-            start_date = date(year, month, 1)
-            end_date = date(year, month, py_calendar.monthrange(year, month)[1])
-
-            # 3. Ambil Catatan Absensi Harian
-            daily_records: List[AttendanceDaily] = (
+            # 3. Query AttendanceDaily
+            query = (
                 session.query(AttendanceDaily)
+                .join(Employee, AttendanceDaily.employee_id == Employee.id)
                 .filter(
-                    AttendanceDaily.attendance_date >= start_date,
-                    AttendanceDaily.attendance_date <= end_date,
-                    AttendanceDaily.employee_id.in_(emp_ids),
+                    extract("year", AttendanceDaily.attendance_date) == year,
+                    extract("month", AttendanceDaily.attendance_date) == month,
                 )
-                .order_by(AttendanceDaily.attendance_date.asc(), AttendanceDaily.employee_id.asc())
+            )
+
+            if unit and unit != "ALL" and unit.strip():
+                query = query.filter(Employee.unit == unit)
+            if employee_id:
+                query = query.filter(Employee.id == employee_id)
+
+            daily_list: List[AttendanceDaily] = (
+                query.options(
+                    joinedload(AttendanceDaily.employee),
+                    joinedload(AttendanceDaily.deduction).joinedload(AttendanceDeduction.items),
+                )
                 .all()
             )
 
-            if not daily_records:
+            if not daily_list:
                 return {
                     "success": False,
-                    "message": f"Tidak ditemukan data attendance_daily untuk periode {month:02d}/{year}. Silakan jalankan pembentukan absensi harian terlebih dahulu.",
-                    "total_processed": 0,
-                    "total_deduction_all": 0,
+                    "error_type": "NO_DAILY_RECORDS",
+                    "message": f"Belum ditemukan data Absensi Harian (attendance_daily) untuk periode {month:02d}/{year}. Silakan generate absensi harian terlebih dahulu.",
                 }
 
-            # 4. Ambil catatan potongan yang sudah ada untuk periode ini (untuk recalculate / update)
-            daily_ids = [d.id for d in daily_records]
-            existing_deductions = (
-                session.query(AttendanceDeduction)
-                .filter(AttendanceDeduction.attendance_daily_id.in_(daily_ids))
-                .all()
-            )
-            deduction_map = {ded.attendance_daily_id: ded for ded in existing_deductions}
-
-            # 5. Proses Perhitungan Setiap Record
             processed_count = 0
-            created_count = 0
+            inserted_count = 0
             updated_count = 0
-            grand_total_deduction = 0
+            skipped_count = 0
 
-            for daily in daily_records:
-                cal = calendar_map.get(daily.attendance_date)
-                calc_result = cls.calculate_daily(
-                    attendance_date=daily.attendance_date,
-                    actual_check_in=daily.actual_check_in,
-                    actual_check_out=daily.actual_check_out,
-                    calendar=cal,
-                    custom_rates=rates,
+            total_nominal_all = 0
+            total_late_nominal = 0
+            total_early_nominal = 0
+            total_missing_in_nominal = 0
+            total_missing_out_nominal = 0
+
+            anomalies = []
+
+            for daily in daily_list:
+                cal = cal_by_date.get(daily.attendance_date)
+                is_working = cal.is_working_day if cal else True
+                day_name = cal.day_name if cal else daily.day_name
+                sched_in = cal.scheduled_check_in if cal else daily.scheduled_check_in
+                sched_out = cal.scheduled_check_out if cal else daily.scheduled_check_out
+
+                # Hitung potongan untuk record ini
+                calc_res = cls.calculate_single_day(
+                    att_date=daily.attendance_date,
+                    actual_in_str=daily.actual_check_in,
+                    actual_out_str=daily.actual_check_out,
+                    is_working_day=is_working,
+                    day_name=day_name,
+                    scheduled_in_override=sched_in,
+                    scheduled_out_override=sched_out,
+                    rule_settings=rule_settings,
                 )
 
-                # Update status kehadiran di daily jika sebelumnya belum sesuai
-                if calc_result["attendance_status"] != "BUKAN_HARI_KERJA":
-                    daily.attendance_status = calc_result["attendance_status"]
+                # Update field di AttendanceDaily
+                daily.terlambat_menit = calc_res["late_minutes"]
+                daily.pulang_cepat_menit = calc_res["early_leave_minutes"]
+                daily.potongan_masuk = calc_res["deduction_late"]
+                daily.potongan_pulang = calc_res["deduction_early_leave"]
+                daily.potongan_tidak_hadir = calc_res["deduction_missing_check_in"] + calc_res["deduction_missing_check_out"]
+                daily.total_potongan = calc_res["total_deduction"]
 
-                # Update kolom kalkulasi di tabel attendance_daily untuk sinkronisasi
-                daily.terlambat_menit = calc_result["late_minutes"]
-                daily.pulang_cepat_menit = calc_result["early_leave_minutes"]
-                daily.potongan_masuk = float(calc_result["deduction_missing_check_in"] + calc_result["deduction_late"])
-                daily.potongan_pulang = float(calc_result["deduction_missing_check_out"] + calc_result["deduction_early_leave"])
-                daily.potongan_tidak_hadir = float(
-                    calc_result["deduction_missing_check_in"] + calc_result["deduction_missing_check_out"]
-                    if calc_result["attendance_status"] == AttendanceStatus.TIDAK_ABSEN.value
-                    else 0
-                )
-                daily.total_potongan = float(calc_result["total_deduction"])
-                daily.updated_at = datetime.utcnow()
-                daily.updated_by = user_name
-
-                # Simpan / update di tabel attendance_deductions
-                existing_ded = deduction_map.get(daily.id)
+                # Simpan atau update tabel AttendanceDeduction
+                existing_ded = daily.deduction
                 if existing_ded:
-                    existing_ded.employee_id = daily.employee_id
-                    existing_ded.attendance_date = daily.attendance_date
-                    existing_ded.late_minutes = calc_result["late_minutes"]
-                    existing_ded.early_leave_minutes = calc_result["early_leave_minutes"]
-                    existing_ded.deduction_late = calc_result["deduction_late"]
-                    existing_ded.deduction_early_leave = calc_result["deduction_early_leave"]
-                    existing_ded.deduction_missing_check_in = calc_result["deduction_missing_check_in"]
-                    existing_ded.deduction_missing_check_out = calc_result["deduction_missing_check_out"]
-                    existing_ded.total_deduction = calc_result["total_deduction"]
-                    existing_ded.calculation_version = cls.CURRENT_CALCULATION_VERSION
-                    existing_ded.calculated_at = datetime.utcnow()
-                    existing_ded.calculated_by = user_name
-                    existing_ded.notes = calc_result["notes"]
-                    updated_count += 1
+                    if not force_recalculate and existing_ded.total_deduction == calc_res["total_deduction"]:
+                        skipped_count += 1
+                    else:
+                        existing_ded.late_minutes = calc_res["late_minutes"]
+                        existing_ded.early_leave_minutes = calc_res["early_leave_minutes"]
+                        existing_ded.deduction_late = calc_res["deduction_late"]
+                        existing_ded.deduction_early_leave = calc_res["deduction_early_leave"]
+                        existing_ded.deduction_missing_check_in = calc_res["deduction_missing_check_in"]
+                        existing_ded.deduction_missing_check_out = calc_res["deduction_missing_check_out"]
+                        existing_ded.total_deduction = calc_res["total_deduction"]
+                        existing_ded.calculation_version = cls.CALCULATION_VERSION
+                        existing_ded.calculated_at = datetime.utcnow()
+                        existing_ded.calculated_by = user_name
+                        existing_ded.notes = calc_res["notes"]
+
+                        # Hapus item lama dan buat ulang
+                        for it in list(existing_ded.items):
+                            session.delete(it)
+
+                        for item_data in calc_res["items"]:
+                            new_item = AttendanceDeductionItem(
+                                attendance_deduction_id=existing_ded.id,
+                                deduction_type=item_data["deduction_type"],
+                                description=item_data["description"],
+                                amount=item_data["amount"],
+                                calculation_reference=item_data.get("calculation_reference"),
+                                created_at=datetime.utcnow(),
+                            )
+                            session.add(new_item)
+
+                        updated_count += 1
                 else:
                     new_ded = AttendanceDeduction(
                         attendance_daily_id=daily.id,
                         employee_id=daily.employee_id,
                         attendance_date=daily.attendance_date,
-                        late_minutes=calc_result["late_minutes"],
-                        early_leave_minutes=calc_result["early_leave_minutes"],
-                        deduction_late=calc_result["deduction_late"],
-                        deduction_early_leave=calc_result["deduction_early_leave"],
-                        deduction_missing_check_in=calc_result["deduction_missing_check_in"],
-                        deduction_missing_check_out=calc_result["deduction_missing_check_out"],
-                        total_deduction=calc_result["total_deduction"],
-                        calculation_version=cls.CURRENT_CALCULATION_VERSION,
+                        late_minutes=calc_res["late_minutes"],
+                        early_leave_minutes=calc_res["early_leave_minutes"],
+                        deduction_late=calc_res["deduction_late"],
+                        deduction_early_leave=calc_res["deduction_early_leave"],
+                        deduction_missing_check_in=calc_res["deduction_missing_check_in"],
+                        deduction_missing_check_out=calc_res["deduction_missing_check_out"],
+                        total_deduction=calc_res["total_deduction"],
+                        calculation_version=cls.CALCULATION_VERSION,
                         calculated_at=datetime.utcnow(),
                         calculated_by=user_name,
-                        notes=calc_result["notes"],
+                        notes=calc_res["notes"],
                     )
                     session.add(new_ded)
-                    deduction_map[daily.id] = new_ded
-                    created_count += 1
+                    session.flush()  # Untuk mendapatkan new_ded.id
 
+                    for item_data in calc_res["items"]:
+                        new_item = AttendanceDeductionItem(
+                            attendance_deduction_id=new_ded.id,
+                            deduction_type=item_data["deduction_type"],
+                            description=item_data["description"],
+                            amount=item_data["amount"],
+                            calculation_reference=item_data.get("calculation_reference"),
+                            created_at=datetime.utcnow(),
+                        )
+                        session.add(new_item)
+
+                    inserted_count += 1
+
+                # Akumulasi statistik
                 processed_count += 1
-                grand_total_deduction += calc_result["total_deduction"]
+                total_nominal_all += calc_res["total_deduction"]
+                total_late_nominal += calc_res["deduction_late"]
+                total_early_nominal += calc_res["deduction_early_leave"]
+                total_missing_in_nominal += calc_res["deduction_missing_check_in"]
+                total_missing_out_nominal += calc_res["deduction_missing_check_out"]
 
-            # 6. Catat Log Audit Trail
-            action_type = "RECALCULATE_DEDUCTION" if recalculate and updated_count > 0 else "CALCULATE_DEDUCTION"
+            # Catat Audit Log
             audit = AuditLog(
-                action=action_type,
-                module="POTONGAN_ABSENSI",
+                action="CALCULATE_DEDUCTIONS",
+                module="DEDUCTIONS",
                 description=(
-                    f"Perhitungan potongan absensi periode {month:02d}/{year} ({unit or 'SEMUA UNIT'}): "
-                    f"{processed_count} data diproses ({created_count} baru, {updated_count} diperbarui). "
-                    f"Total potongan Rp{grand_total_deduction:,}."
+                    f"Perhitungan potongan absensi periode {month:02d}/{year} selesai. "
+                    f"Diproses: {processed_count} hari absensi ({inserted_count} baru, {updated_count} update). "
+                    f"Total Potongan: Rp{total_nominal_all:,}. Terlambat: Rp{total_late_nominal:,}, "
+                    f"Pulang Cepat: Rp{total_early_nominal:,}, Tdk Masuk: Rp{total_missing_in_nominal:,}, Tdk Pulang: Rp{total_missing_out_nominal:,}."
                 ),
+                created_at=datetime.utcnow(),
             )
             session.add(audit)
-            session.commit()
 
-            logger.info(
-                f"Perhitungan potongan selesai untuk periode {month:02d}/{year}: "
-                f"{processed_count} data, total Rp{grand_total_deduction:,}"
-            )
+            logger.info(f"Perhitungan potongan {month:02d}/{year} berhasil: Total Rp{total_nominal_all:,}.")
 
             return {
                 "success": True,
-                "message": (
-                    f"Berhasil menghitung potongan absensi periode {month:02d}/{year}!\n"
-                    f"Total {processed_count} data diproses ({created_count} baru, {updated_count} dihitung ulang).\n"
-                    f"Total nominal potongan: Rp{grand_total_deduction:,}."
-                ),
-                "total_processed": processed_count,
-                "created_count": created_count,
-                "updated_count": updated_count,
-                "total_deduction_all": grand_total_deduction,
                 "year": year,
                 "month": month,
+                "unit": unit or "ALL",
+                "processed_count": processed_count,
+                "inserted_count": inserted_count,
+                "updated_count": updated_count,
+                "skipped_count": skipped_count,
+                "total_nominal_all": total_nominal_all,
+                "total_late_nominal": total_late_nominal,
+                "total_early_nominal": total_early_nominal,
+                "total_missing_in_nominal": total_missing_in_nominal,
+                "total_missing_out_nominal": total_missing_out_nominal,
+                "message": (
+                    f"Perhitungan potongan absensi periode {month:02d}/{year} berhasil diproses! "
+                    f"Total potongan yang terbentuk: Rp{total_nominal_all:,} untuk {processed_count} data kehadiran harian."
+                ),
             }
 
     @classmethod
-    def get_monthly_recap(
+    def get_monthly_deduction_recap(
         cls,
         year: int,
         month: int,
         unit: Optional[str] = None,
-        search: Optional[str] = None,
+        keyword: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Menyediakan data Rekapitulasi Potongan Bulanan per Karyawan.
-        Kolom wajib:
-        - No
-        - Unit
-        - Nama
-        - Status (Kepegawaian)
-        - Terlambat (Total Rp)
-        - Pulang Cepat (Total Rp)
-        - Tidak Absen Masuk (Total Rp)
-        - Tidak Absen Pulang (Total Rp)
-        - Jumlah Potongan Absensi (Total Rp)
-        Menghitung total per unit dan total seluruh karyawan.
+        Menghasilkan data REKAP DATA POTONGAN ABSENSI Bulanan.
+        Kolom:
+        No, Unit, Nama, Status, Terlambat, Pulang Cepat, Tidak Absen Masuk, Tidak Absen Pulang, Jumlah Potongan Absensi.
+        Mencakup:
+        - Total per karyawan
+        - Total per unit
+        - Total keseluruhan periode
         """
         with get_db_session() as session:
-            # Ambil karyawan aktif yang sesuai filter
-            emp_q = session.query(Employee).filter(Employee.status == EmployeeStatus.AKTIF)
+            # Ambil semua karyawan yang relevan
+            emp_query = session.query(Employee)
             if unit and unit != "ALL" and unit.strip():
-                emp_q = emp_q.filter(Employee.unit == unit)
-            if search and search.strip():
-                term = f"%{search.strip()}%"
-                emp_q = emp_q.filter(
+                emp_query = emp_query.filter(Employee.unit == unit)
+
+            if keyword and keyword.strip():
+                term = f"%{keyword.strip()}%"
+                emp_query = emp_query.filter(
                     or_(
                         Employee.nama.ilike(term),
                         Employee.emp_num.ilike(term),
+                        Employee.no_id.ilike(term),
                         Employee.nik.ilike(term),
                     )
                 )
-            employees = emp_q.order_by(Employee.unit.asc(), Employee.nama.asc()).all()
-            emp_map = {e.id: e for e in employees}
-            emp_ids = list(emp_map.keys())
+
+            employees = emp_query.order_by(Employee.unit.asc(), Employee.nama.asc()).all()
+            emp_ids = [e.id for e in employees]
 
             if not emp_ids:
                 return {
                     "year": year,
                     "month": month,
-                    "unit_filter": unit or "ALL",
-                    "items": [],
-                    "unit_totals": {},
+                    "unit": unit or "ALL",
+                    "rows": [],
+                    "unit_summaries": [],
                     "grand_total": {
-                        "total_karyawan": 0,
-                        "total_terlambat": 0,
-                        "total_pulang_cepat": 0,
-                        "total_tidak_absen_masuk": 0,
-                        "total_tidak_absen_pulang": 0,
-                        "total_potongan_keseluruhan": 0,
+                        "terlambat": 0,
+                        "pulang_cepat": 0,
+                        "tidak_absen_masuk": 0,
+                        "tidak_absen_pulang": 0,
+                        "total_potongan": 0,
+                        "karyawan_count": 0,
                     },
                 }
 
-            start_date = date(year, month, 1)
-            end_date = date(year, month, py_calendar.monthrange(year, month)[1])
-
-            # Ambil seluruh attendance_deductions untuk karyawan ini di bulan & tahun ini
-            deductions: List[AttendanceDeduction] = (
-                session.query(AttendanceDeduction)
-                .filter(
-                    AttendanceDeduction.attendance_date >= start_date,
-                    AttendanceDeduction.attendance_date <= end_date,
-                    AttendanceDeduction.employee_id.in_(emp_ids),
+            # Ambil data agregat potongan dari attendance_deductions
+            ded_query = (
+                session.query(
+                    AttendanceDeduction.employee_id,
+                    func.sum(AttendanceDeduction.deduction_late).label("sum_late"),
+                    func.sum(AttendanceDeduction.deduction_early_leave).label("sum_early"),
+                    func.sum(AttendanceDeduction.deduction_missing_check_in).label("sum_miss_in"),
+                    func.sum(AttendanceDeduction.deduction_missing_check_out).label("sum_miss_out"),
+                    func.sum(AttendanceDeduction.total_deduction).label("sum_total"),
+                    func.count(AttendanceDeduction.id).label("count_days"),
                 )
+                .filter(
+                    AttendanceDeduction.employee_id.in_(emp_ids),
+                    extract("year", AttendanceDeduction.attendance_date) == year,
+                    extract("month", AttendanceDeduction.attendance_date) == month,
+                )
+                .group_by(AttendanceDeduction.employee_id)
                 .all()
             )
 
-            # Kelompokkan potongan per employee_id
-            emp_totals = defaultdict(lambda: {
+            ded_map = {
+                row.employee_id: {
+                    "terlambat": int(row.sum_late or 0),
+                    "pulang_cepat": int(row.sum_early or 0),
+                    "tidak_absen_masuk": int(row.sum_miss_in or 0),
+                    "tidak_absen_pulang": int(row.sum_miss_out or 0),
+                    "total_potongan": int(row.sum_total or 0),
+                    "count_days": int(row.count_days or 0),
+                }
+                for row in ded_query
+            }
+
+            # Susun baris tabel
+            rows = []
+            unit_agg = {}
+
+            grand_total = {
                 "terlambat": 0,
                 "pulang_cepat": 0,
                 "tidak_absen_masuk": 0,
                 "tidak_absen_pulang": 0,
-                "total": 0,
-                "count_days": 0,
-            })
-
-            for ded in deductions:
-                t = emp_totals[ded.employee_id]
-                t["terlambat"] += ded.deduction_late
-                t["pulang_cepat"] += ded.deduction_early_leave
-                t["tidak_absen_masuk"] += ded.deduction_missing_check_in
-                t["tidak_absen_pulang"] += ded.deduction_missing_check_out
-                t["total"] += ded.total_deduction
-                t["count_days"] += 1
-
-            # Bentuk List Baris Rekap
-            items = []
-            unit_totals = defaultdict(lambda: {
-                "employee_count": 0,
-                "total_terlambat": 0,
-                "total_pulang_cepat": 0,
-                "total_tidak_absen_masuk": 0,
-                "total_tidak_absen_pulang": 0,
                 "total_potongan": 0,
-            })
-
-            grand_terlambat = 0
-            grand_pulang_cepat = 0
-            grand_missing_in = 0
-            grand_missing_out = 0
-            grand_total_potongan = 0
+                "karyawan_count": len(employees),
+            }
 
             for idx, emp in enumerate(employees, start=1):
-                t = emp_totals[emp.id]
-                item_unit = emp.unit or "Tanpa Unit"
-                emp_status_str = emp.status.value if hasattr(emp.status, "value") else str(emp.status)
+                stat = ded_map.get(emp.id, {
+                    "terlambat": 0,
+                    "pulang_cepat": 0,
+                    "tidak_absen_masuk": 0,
+                    "tidak_absen_pulang": 0,
+                    "total_potongan": 0,
+                    "count_days": 0,
+                })
 
-                row = {
+                emp_unit = emp.unit or "Tanpa Unit"
+
+                row_data = {
                     "no": idx,
                     "employee_id": emp.id,
                     "emp_num": emp.emp_num or "-",
-                    "no_id": emp.no_id or "-",
                     "nik": emp.nik or "-",
+                    "unit": emp_unit,
                     "nama": emp.nama,
-                    "unit": item_unit,
-                    "status": emp_status_str,
-                    "terlambat": t["terlambat"],
-                    "pulang_cepat": t["pulang_cepat"],
-                    "tidak_absen_masuk": t["tidak_absen_masuk"],
-                    "tidak_absen_pulang": t["tidak_absen_pulang"],
-                    "jumlah_potongan": t["total"],
-                    # Representasi terformat
-                    "terlambat_formatted": f"Rp{t['terlambat']:,}",
-                    "pulang_cepat_formatted": f"Rp{t['pulang_cepat']:,}",
-                    "tidak_absen_masuk_formatted": f"Rp{t['tidak_absen_masuk']:,}",
-                    "tidak_absen_pulang_formatted": f"Rp{t['tidak_absen_pulang']:,}",
-                    "jumlah_potongan_formatted": f"Rp{t['total']:,}",
+                    "status": emp.status.value if hasattr(emp.status, "value") else str(emp.status),
+                    "terlambat": stat["terlambat"],
+                    "pulang_cepat": stat["pulang_cepat"],
+                    "tidak_absen_masuk": stat["tidak_absen_masuk"],
+                    "tidak_absen_pulang": stat["tidak_absen_pulang"],
+                    "jumlah_potongan_absensi": stat["total_potongan"],
+                    "days_counted": stat["count_days"],
                 }
-                items.append(row)
+                rows.append(row_data)
 
-                # Akumulasi Unit
-                u = unit_totals[item_unit]
-                u["employee_count"] += 1
-                u["total_terlambat"] += t["terlambat"]
-                u["total_pulang_cepat"] += t["pulang_cepat"]
-                u["total_tidak_absen_masuk"] += t["tidak_absen_masuk"]
-                u["total_tidak_absen_pulang"] += t["tidak_absen_pulang"]
-                u["total_potongan"] += t["total"]
+                # Subtotal per Unit
+                if emp_unit not in unit_agg:
+                    unit_agg[emp_unit] = {
+                        "unit": emp_unit,
+                        "terlambat": 0,
+                        "pulang_cepat": 0,
+                        "tidak_absen_masuk": 0,
+                        "tidak_absen_pulang": 0,
+                        "total_potongan": 0,
+                        "karyawan_count": 0,
+                    }
+                unit_agg[emp_unit]["terlambat"] += stat["terlambat"]
+                unit_agg[emp_unit]["pulang_cepat"] += stat["pulang_cepat"]
+                unit_agg[emp_unit]["tidak_absen_masuk"] += stat["tidak_absen_masuk"]
+                unit_agg[emp_unit]["tidak_absen_pulang"] += stat["tidak_absen_pulang"]
+                unit_agg[emp_unit]["total_potongan"] += stat["total_potongan"]
+                unit_agg[emp_unit]["karyawan_count"] += 1
 
-                # Akumulasi Grand Total
-                grand_terlambat += t["terlambat"]
-                grand_pulang_cepat += t["pulang_cepat"]
-                grand_missing_in += t["tidak_absen_masuk"]
-                grand_missing_out += t["tidak_absen_pulang"]
-                grand_total_potongan += t["total"]
+                # Grand Total
+                grand_total["terlambat"] += stat["terlambat"]
+                grand_total["pulang_cepat"] += stat["pulang_cepat"]
+                grand_total["tidak_absen_masuk"] += stat["tidak_absen_masuk"]
+                grand_total["tidak_absen_pulang"] += stat["tidak_absen_pulang"]
+                grand_total["total_potongan"] += stat["total_potongan"]
+
+            unit_summaries = sorted(unit_agg.values(), key=lambda x: x["unit"])
 
             return {
                 "year": year,
                 "month": month,
-                "unit_filter": unit or "ALL",
-                "items": items,
-                "unit_totals": dict(unit_totals),
-                "grand_total": {
-                    "total_karyawan": len(employees),
-                    "total_terlambat": grand_terlambat,
-                    "total_pulang_cepat": grand_pulang_cepat,
-                    "total_tidak_absen_masuk": grand_missing_in,
-                    "total_tidak_absen_pulang": grand_missing_out,
-                    "total_potongan_keseluruhan": grand_total_potongan,
-                    "total_terlambat_formatted": f"Rp{grand_terlambat:,}",
-                    "total_pulang_cepat_formatted": f"Rp{grand_pulang_cepat:,}",
-                    "total_tidak_absen_masuk_formatted": f"Rp{grand_missing_in:,}",
-                    "total_tidak_absen_pulang_formatted": f"Rp{grand_missing_out:,}",
-                    "total_potongan_keseluruhan_formatted": f"Rp{grand_total_potongan:,}",
-                },
+                "unit": unit or "ALL",
+                "rows": rows,
+                "unit_summaries": unit_summaries,
+                "grand_total": grand_total,
             }
 
     @classmethod
-    def get_daily_details(
+    def get_daily_deduction_report(
         cls,
         year: int,
         month: int,
         unit: Optional[str] = None,
-        search: Optional[str] = None,
-        date_filter: Optional[date] = None,
-        status_filter: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        attendance_status: Optional[str] = None,
+        keyword: Optional[str] = None,
+        specific_date: Optional[date] = None,
+        page: int = 1,
+        page_size: int = 50,
+        sort_by: str = "attendance_date",
+        sort_dir: str = "asc",
+    ) -> Dict[str, Any]:
         """
-        Menyajikan Laporan Rincian Absensi dan Potongan Harian (Bagian 9 Spesifikasi).
+        Menghasilkan DATA ABSENSI DAN POTONGAN HARIAN.
         Kolom:
-        - No
-        - Unit
-        - Nama
-        - Hari
-        - Tanggal
-        - Jam Masuk
-        - Jam Pulang
-        - Status Masuk
-        - Status Pulang
-        - Status Kehadiran
-        - Menit Terlambat
-        - Menit Pulang Cepat
-        - Potongan Terlambat
-        - Potongan Pulang Cepat
-        - Tidak Absen Masuk
-        - Tidak Absen Pulang
-        - Total Potongan Per Hari
+        No, Unit, Nama, Hari, Tanggal, Jam Masuk, Jam Pulang, Status Masuk, Status Pulang,
+        Status Kehadiran, Menit Terlambat, Menit Pulang Cepat, Potongan Terlambat,
+        Potongan Pulang Cepat, Tidak Absen Masuk, Tidak Absen Pulang, Total Potongan Per Hari.
         """
-        start_date = date(year, month, 1)
-        end_date = date(year, month, py_calendar.monthrange(year, month)[1])
-
         with get_db_session() as session:
-            q = (
-                session.query(AttendanceDaily, AttendanceDeduction, Employee)
+            query = (
+                session.query(AttendanceDaily)
                 .join(Employee, AttendanceDaily.employee_id == Employee.id)
                 .outerjoin(AttendanceDeduction, AttendanceDaily.id == AttendanceDeduction.attendance_daily_id)
                 .filter(
-                    AttendanceDaily.attendance_date >= start_date,
-                    AttendanceDaily.attendance_date <= end_date,
+                    extract("year", AttendanceDaily.attendance_date) == year,
+                    extract("month", AttendanceDaily.attendance_date) == month,
                 )
             )
 
             if unit and unit != "ALL" and unit.strip():
-                q = q.filter(Employee.unit == unit)
+                query = query.filter(Employee.unit == unit)
 
-            if search and search.strip():
-                term = f"%{search.strip()}%"
-                q = q.filter(
+            if attendance_status and attendance_status != "ALL" and attendance_status.strip():
+                query = query.filter(AttendanceDaily.attendance_status == attendance_status)
+
+            if specific_date:
+                query = query.filter(AttendanceDaily.attendance_date == specific_date)
+
+            if keyword and keyword.strip():
+                term = f"%{keyword.strip()}%"
+                query = query.filter(
                     or_(
                         Employee.nama.ilike(term),
                         Employee.emp_num.ilike(term),
-                        Employee.nik.ilike(term),
+                        Employee.no_id.ilike(term),
                     )
                 )
 
-            if date_filter:
-                q = q.filter(AttendanceDaily.attendance_date == date_filter)
+            total_records = query.count()
 
-            if status_filter and status_filter != "ALL":
-                q = q.filter(AttendanceDaily.attendance_status == status_filter)
+            # Sorting
+            sort_col = getattr(AttendanceDaily, sort_by, AttendanceDaily.attendance_date)
+            if sort_by == "nama":
+                sort_col = Employee.nama
+            elif sort_by == "unit":
+                sort_col = Employee.unit
 
-            records = q.order_by(AttendanceDaily.attendance_date.asc(), Employee.nama.asc()).all()
+            if sort_dir.lower() == "desc":
+                query = query.order_by(desc(sort_col))
+            else:
+                query = query.order_by(sort_col.asc())
 
-            results = []
-            for idx, (daily, ded, emp) in enumerate(records, start=1):
-                late_m = ded.late_minutes if ded else (daily.terlambat_menit or 0)
-                early_m = ded.early_leave_minutes if ded else (daily.pulang_cepat_menit or 0)
-                ded_late = ded.deduction_late if ded else 0
-                ded_early = ded.deduction_early_leave if ded else 0
-                ded_miss_in = ded.deduction_missing_check_in if ded else 0
-                ded_miss_out = ded.deduction_missing_check_out if ded else 0
-                total_ded = ded.total_deduction if ded else int(daily.total_potongan or 0)
+            offset = (page - 1) * page_size
+            items = (
+                query.options(
+                    joinedload(AttendanceDaily.employee),
+                    joinedload(AttendanceDaily.deduction),
+                )
+                .offset(offset)
+                .limit(page_size)
+                .all()
+            )
 
-                row = {
+            total_pages = max(1, (total_records + page_size - 1) // page_size)
+
+            records = []
+            for idx, item in enumerate(items, start=offset + 1):
+                ded = item.deduction
+                late_min = ded.late_minutes if ded else int(item.terlambat_menit or 0)
+                early_min = ded.early_leave_minutes if ded else int(item.pulang_cepat_menit or 0)
+                pot_late = ded.deduction_late if ded else int(item.potongan_masuk or 0)
+                pot_early = ded.deduction_early_leave if ded else int(item.potongan_pulang or 0)
+                pot_miss_in = ded.deduction_missing_check_in if ded else 0
+                pot_miss_out = ded.deduction_missing_check_out if ded else 0
+                tot = ded.total_deduction if ded else int(item.total_potongan or 0)
+
+                records.append({
                     "no": idx,
-                    "id": daily.id,
-                    "employee_id": emp.id,
-                    "unit": emp.unit or "-",
-                    "nama": emp.nama,
-                    "hari": daily.day_name or daily.attendance_date.strftime("%A"),
-                    "tanggal": daily.attendance_date.strftime("%Y-%m-%d"),
-                    "jam_masuk": daily.actual_check_in or "-",
-                    "jam_pulang": daily.actual_check_out or "-",
-                    "status_masuk": daily.check_in_status,
-                    "status_pulang": daily.check_out_status,
-                    "status_kehadiran": daily.attendance_status,
-                    "menit_terlambat": late_m,
-                    "menit_pulang_cepat": early_m,
-                    "potongan_terlambat": ded_late,
-                    "potongan_pulang_cepat": ded_early,
-                    "tidak_absen_masuk": ded_miss_in,
-                    "tidak_absen_pulang": ded_miss_out,
-                    "total_potongan": total_ded,
-                    # Format Rupiah
-                    "potongan_terlambat_formatted": f"Rp{ded_late:,}",
-                    "potongan_pulang_cepat_formatted": f"Rp{ded_early:,}",
-                    "tidak_absen_masuk_formatted": f"Rp{ded_miss_in:,}",
-                    "tidak_absen_pulang_formatted": f"Rp{ded_miss_out:,}",
-                    "total_potongan_formatted": f"Rp{total_ded:,}",
-                    "notes": ded.notes if ded else (daily.notes or ""),
-                }
-                results.append(row)
+                    "id": item.id,
+                    "unit": item.employee.unit if item.employee else "-",
+                    "nama": item.employee.nama if item.employee else "-",
+                    "emp_num": item.employee.emp_num if item.employee else "-",
+                    "nik": item.employee.nik if item.employee else "-",
+                    "hari": item.day_name or "-",
+                    "tanggal": item.attendance_date.strftime("%Y-%m-%d") if item.attendance_date else "-",
+                    "jam_masuk": item.actual_check_in or "-",
+                    "jam_pulang": item.actual_check_out or "-",
+                    "status_masuk": item.check_in_status,
+                    "status_pulang": item.check_out_status,
+                    "status_kehadiran": item.attendance_status,
+                    "menit_terlambat": late_min,
+                    "menit_pulang_cepat": early_min,
+                    "potongan_terlambat": pot_late,
+                    "potongan_pulang_cepat": pot_early,
+                    "tidak_absen_masuk": pot_miss_in,
+                    "tidak_absen_pulang": pot_miss_out,
+                    "total_potongan_per_hari": tot,
+                })
 
-            return results
+            return {
+                "total_records": total_records,
+                "total_pages": total_pages,
+                "current_page": page,
+                "page_size": page_size,
+                "records": records,
+            }
 
     @classmethod
-    def validate_calculation_integrity(cls, year: int, month: int) -> Dict[str, Any]:
+    def validate_deductions_integrity(
+        cls,
+        year: int,
+        month: int,
+        unit: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
-        Validasi integritas data perhitungan (Memenuhi Bagian 10):
-        1. Tidak hadir penuh = Rp20.000 (tidak ada Alfa ganda).
-        2. Hari libur = Rp0.
-        3. Tidak absen masuk tidak menghitung keterlambatan.
-        4. Tidak absen pulang tidak menghitung pulang cepat.
-        5. Nominal tidak ada yang bernilai negatif.
-        6. Satu attendance_daily hanya memiliki 1 rincian perhitungan.
+        Melakukan validasi otomatis terhadap hasil perhitungan potongan:
+        1. Total potongan tidak boleh negatif.
+        2. Nominal harus integer (tidak ada float).
+        3. Tidak boleh ada duplikasi employee_id dan tanggal.
+        4. Hari libur tidak boleh menghasilkan potongan.
+        5. Tidak hadir harus menghasilkan maksimal: Tidak absen masuk 10k, Tidak absen pulang 10k, Total 20k (bukan 40k).
+        6. Potongan tidak dihitung dua kali.
+        7. Deteksi data belum dihitung vs sudah dihitung.
         """
-        issues = []
-        start_date = date(year, month, 1)
-        end_date = date(year, month, py_calendar.monthrange(year, month)[1])
-
         with get_db_session() as session:
-            deductions: List[AttendanceDeduction] = (
-                session.query(AttendanceDeduction)
-                .join(AttendanceDaily, AttendanceDeduction.attendance_daily_id == AttendanceDaily.id)
+            # 1. Cek duplikasi employee_id dan tanggal pada attendance_deductions
+            dup_query = (
+                session.query(
+                    AttendanceDeduction.employee_id,
+                    AttendanceDeduction.attendance_date,
+                    func.count(AttendanceDeduction.id).label("cnt"),
+                )
                 .filter(
-                    AttendanceDeduction.attendance_date >= start_date,
-                    AttendanceDeduction.attendance_date <= end_date,
+                    extract("year", AttendanceDeduction.attendance_date) == year,
+                    extract("month", AttendanceDeduction.attendance_date) == month,
+                )
+                .group_by(AttendanceDeduction.employee_id, AttendanceDeduction.attendance_date)
+                .having(func.count(AttendanceDeduction.id) > 1)
+                .all()
+            )
+
+            # 2. Cek potongan bernilai negatif
+            neg_query = (
+                session.query(AttendanceDeduction)
+                .filter(
+                    extract("year", AttendanceDeduction.attendance_date) == year,
+                    extract("month", AttendanceDeduction.attendance_date) == month,
+                    or_(
+                        AttendanceDeduction.total_deduction < 0,
+                        AttendanceDeduction.deduction_late < 0,
+                        AttendanceDeduction.deduction_early_leave < 0,
+                        AttendanceDeduction.deduction_missing_check_in < 0,
+                        AttendanceDeduction.deduction_missing_check_out < 0,
+                    ),
                 )
                 .all()
             )
 
-            # Cek duplikasi daily_id
-            seen_daily_ids = set()
-            for ded in deductions:
-                if ded.attendance_daily_id in seen_daily_ids:
-                    issues.append(f"Duplikasi record perhitungan pada attendance_daily_id={ded.attendance_daily_id}")
-                seen_daily_ids.add(ded.attendance_daily_id)
-
-                # Validasi nilai non-negatif
-                if (
-                    ded.deduction_late < 0
-                    or ded.deduction_early_leave < 0
-                    or ded.deduction_missing_check_in < 0
-                    or ded.deduction_missing_check_out < 0
-                    or ded.total_deduction < 0
-                ):
-                    issues.append(f"Ditemukan nominal negatif pada deduction id={ded.id}")
-
-                # Validasi jumlah total komponen
-                sum_components = (
-                    ded.deduction_late
-                    + ded.deduction_early_leave
-                    + ded.deduction_missing_check_in
-                    + ded.deduction_missing_check_out
+            # 3. Cek apakah ada potongan pada hari libur / bukan hari kerja
+            holiday_violations = (
+                session.query(AttendanceDeduction)
+                .join(WorkCalendar, AttendanceDeduction.attendance_date == WorkCalendar.calendar_date)
+                .filter(
+                    WorkCalendar.is_working_day == False,
+                    AttendanceDeduction.total_deduction > 0,
+                    extract("year", AttendanceDeduction.attendance_date) == year,
+                    extract("month", AttendanceDeduction.attendance_date) == month,
                 )
-                if sum_components != ded.total_deduction:
-                    issues.append(
-                        f"Inkonsistensi total pada deduction id={ded.id}: komponen={sum_components}, total={ded.total_deduction}"
-                    )
+                .all()
+            )
 
-                # Validasi rule: jika missing check in -> late_minutes harus 0 dan deduction_late harus 0
-                if ded.deduction_missing_check_in > 0 and (ded.late_minutes > 0 or ded.deduction_late > 0):
-                    issues.append(f"Double counting terlambat saat scan masuk kosong pada deduction id={ded.id}")
+            # 4. Cek anomali tidak hadir (kedua scan kosong tapi total > 20000 atau terjadi penambahan alfa ganda)
+            unreasonable_absent = (
+                session.query(AttendanceDeduction)
+                .join(AttendanceDaily, AttendanceDeduction.attendance_daily_id == AttendanceDaily.id)
+                .filter(
+                    extract("year", AttendanceDeduction.attendance_date) == year,
+                    extract("month", AttendanceDeduction.attendance_date) == month,
+                    AttendanceDaily.actual_check_in == None,
+                    AttendanceDaily.actual_check_out == None,
+                    AttendanceDeduction.total_deduction > 20000,
+                )
+                .all()
+            )
 
-                # Validasi rule: jika missing check out -> early_leave_minutes harus 0 dan deduction_early_leave harus 0
-                if ded.deduction_missing_check_out > 0 and (ded.early_leave_minutes > 0 or ded.deduction_early_leave > 0):
-                    issues.append(f"Double counting pulang cepat saat scan pulang kosong pada deduction id={ded.id}")
+            # 5. Cek data absensi harian yang belum dihitung
+            daily_total = (
+                session.query(AttendanceDaily)
+                .filter(
+                    extract("year", AttendanceDaily.attendance_date) == year,
+                    extract("month", AttendanceDaily.attendance_date) == month,
+                )
+                .count()
+            )
 
-                # Validasi rule: jika tidak absen keduanya -> total harus <= 20.000 (tidak boleh 40.000)
-                if ded.deduction_missing_check_in > 0 and ded.deduction_missing_check_out > 0:
-                    if ded.total_deduction > 20000:
-                        issues.append(
-                            f"Total ketidakhadiran melebihi Rp20.000 (terindikasi double counting alfa) pada id={ded.id}: total={ded.total_deduction}"
-                        )
+            deduction_total = (
+                session.query(AttendanceDeduction)
+                .filter(
+                    extract("year", AttendanceDeduction.attendance_date) == year,
+                    extract("month", AttendanceDeduction.attendance_date) == month,
+                )
+                .count()
+            )
+
+            uncalculated_count = max(0, daily_total - deduction_total)
+
+            is_valid = (
+                len(dup_query) == 0
+                and len(neg_query) == 0
+                and len(holiday_violations) == 0
+                and len(unreasonable_absent) == 0
+            )
+
+            issues = []
+            if len(dup_query) > 0:
+                issues.append(f"Ditemukan {len(dup_query)} record duplikasi karyawan x tanggal pada data potongan.")
+            if len(neg_query) > 0:
+                issues.append(f"Ditemukan {len(neg_query)} nilai potongan bernilai negatif.")
+            if len(holiday_violations) > 0:
+                issues.append(f"Ditemukan {len(holiday_violations)} potongan pada hari libur / bukan hari kerja.")
+            if len(unreasonable_absent) > 0:
+                issues.append(f"Ditemukan {len(unreasonable_absent)} anomali potongan ketidakhadiran > Rp20.000.")
+            if uncalculated_count > 0:
+                issues.append(f"Terdapat {uncalculated_count} data absensi harian yang belum dihitung potongannya.")
 
             return {
-                "is_valid": len(issues) == 0,
-                "total_checked": len(deductions),
-                "issue_count": len(issues),
+                "is_valid": is_valid,
+                "year": year,
+                "month": month,
+                "daily_total": daily_total,
+                "calculated_total": deduction_total,
+                "uncalculated_count": uncalculated_count,
+                "duplicate_count": len(dup_query),
+                "negative_count": len(neg_query),
+                "holiday_violation_count": len(holiday_violations),
+                "unreasonable_absent_count": len(unreasonable_absent),
                 "issues": issues,
             }

@@ -1,68 +1,67 @@
 """
-Layanan Ekspor Laporan Rekapitulasi & Detail Potongan Absensi (Tahap 5).
-SIAP - Sistem Informasi Administrasi Presensi.
-
+Modul Layanan Export Laporan SIAP (ExportService).
 Mendukung:
-1. Ekspor Rekap Potongan Bulanan ke format Excel (.xlsx) dan PDF (.pdf)
-2. Ekspor Detail Absensi & Potongan Harian ke format Excel (.xlsx) dan PDF (.pdf)
-Dengan tata letak profesional, header resmi, format mata uang Rupiah, dan total otomatis.
+1. Export Rekapitulasi Potongan Bulanan ke Excel (.xlsx) dan PDF (.pdf).
+2. Export Laporan Detail Absensi & Potongan Harian ke Excel (.xlsx) dan PDF (.pdf).
+3. Menggunakan library OpenPyXL / Pandas untuk Excel dan ReportLab untuk PDF.
+4. Dilengkapi format header resmi, border sel, penomoran halaman, dan grand total.
 """
 import os
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
+from config.settings import EXPORT_DIR
+from services.deduction_calculation_service import DeductionCalculationService
 from utils.logger import get_logger
 
 logger = get_logger("ExportService")
 
 
 class ExportService:
-    """Layanan ekspor laporan absensi dan potongan ke Excel dan PDF."""
+    """Service untuk mengekspor laporan rekapitulasi dan detail absensi."""
 
-    @staticmethod
-    def _ensure_directory(file_path: str):
-        directory = os.path.dirname(file_path)
-        if directory and not os.path.exists(directory):
-            os.makedirs(directory, exist_ok=True)
-
-    # =========================================================================
-    # EKSPOR REKAP POTONGAN BULANAN KE EXCEL
-    # =========================================================================
     @classmethod
     def export_rekap_potongan_excel(
         cls,
-        rekap_data: Dict[str, Any],
-        output_path: str,
+        year: int,
+        month: int,
+        unit: Optional[str] = None,
+        output_path: Optional[str] = None,
+        user_name: str = "ADMIN",
     ) -> str:
         """
-        Mengekspor data rekap bulanan ke format Excel (.xlsx) menggunakan openpyxl.
+        Mengekspor Rekap Data Potongan Absensi ke format Excel (.xlsx).
+        Kolom: No, Unit, Nama, Status, Terlambat, Pulang Cepat, Tidak Absen Masuk, Tidak Absen Pulang, Jumlah Potongan Absensi.
         """
-        cls._ensure_directory(output_path)
-        year = rekap_data.get("year", datetime.now().year)
-        month = rekap_data.get("month", datetime.now().month)
-        unit = rekap_data.get("unit_filter", "SEMUA UNIT")
-        items = rekap_data.get("items", [])
-        grand_total = rekap_data.get("grand_total", {})
+        recap_data = DeductionCalculationService.get_monthly_deduction_recap(year, month, unit)
+        rows = recap_data["rows"]
+        grand_total = recap_data["grand_total"]
+
+        if not output_path:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            unit_suffix = f"_{unit}" if unit and unit != "ALL" else ""
+            filename = f"Rekap_Potongan_Absensi_{year}_{month:02d}{unit_suffix}_{timestamp}.xlsx"
+            output_path = os.path.join(EXPORT_DIR, filename)
 
         try:
-            from openpyxl import Workbook
+            import openpyxl
             from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
             from openpyxl.utils import get_column_letter
 
-            wb = Workbook()
+            wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = f"Rekap Potongan {month:02d}-{year}"
+            ws.views.sheetView[0].showGridLines = True
 
-            # Palet Warna Korporat
-            navy_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
-            soft_blue_fill = PatternFill(start_color="DBEAFE", end_color="DBEAFE", fill_type="solid")
-            gray_header_fill = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
-            
-            font_title = Font(name="Calibri", size=16, bold=True, color="1E3A8A")
-            font_subtitle = Font(name="Calibri", size=11, italic=True, color="475569")
-            font_header = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
-            font_bold = Font(name="Calibri", size=10, bold=True)
-            font_regular = Font(name="Calibri", size=10)
+            # Gaya Teks & Warna (Tema SIAP Navy/Blue)
+            title_font = Font(name="Calibri", size=14, bold=True, color="1E3A8A")
+            sub_font = Font(name="Calibri", size=10, bold=False, color="475569")
+            header_font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+            bold_font = Font(name="Calibri", size=10, bold=True)
+            regular_font = Font(name="Calibri", size=10)
+
+            header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
+            total_fill = PatternFill(start_color="EFF6FF", end_color="EFF6FF", fill_type="solid")
 
             thin_border = Border(
                 left=Side(style="thin", color="CBD5E1"),
@@ -77,136 +76,150 @@ class ExportService:
                 bottom=Side(style="double", color="0F172A"),
             )
 
-            # 1. Judul Dokumen
+            # Judul Laporan
             ws["A1"] = "SISTEM INFORMASI ADMINISTRASI PRESENSI (SIAP)"
-            ws["A1"].font = font_title
-            ws["A2"] = f"LAPORAN REKAPITULASI DATA POTONGAN ABSENSI KARYAWAN"
+            ws["A1"].font = title_font
+            ws["A2"] = f"REKAPITULASI POTONGAN ABSENSI KARYAWAN - PERIODE {month:02d}/{year}"
             ws["A2"].font = Font(name="Calibri", size=12, bold=True, color="0F172A")
-            ws["A3"] = f"Periode: Bulan {month:02d} Tahun {year} | Unit: {unit} | Dicetak: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
-            ws["A3"].font = font_subtitle
+            ws["A3"] = f"Filter Unit: {unit or 'Semua Unit'} | Tanggal Cetak: {datetime.now().strftime('%d/%m/%Y %H:%M')} | Operator: {user_name}"
+            ws["A3"].font = sub_font
 
-            # 2. Header Tabel (Baris 5)
+            start_row = 5
             headers = [
-                "No", "Unit", "No ID / NIK", "Nama Karyawan", "Status",
-                "Terlambat (Rp)", "Pulang Cepat (Rp)", "Tidak Absen Masuk (Rp)",
-                "Tidak Absen Pulang (Rp)", "Jumlah Potongan (Rp)"
+                "No",
+                "Unit Kerja",
+                "Nama Karyawan",
+                "Status",
+                "Terlambat (Rp)",
+                "Pulang Cepat (Rp)",
+                "Tdk Absen Masuk (Rp)",
+                "Tdk Absen Pulang (Rp)",
+                "Jumlah Potongan (Rp)",
             ]
-            row_idx = 5
-            for col_idx, header in enumerate(headers, start=1):
-                cell = ws.cell(row=row_idx, column=col_idx, value=header)
-                cell.font = font_header
-                cell.fill = navy_fill
+
+            # Tulis Header
+            for col_num, h_text in enumerate(headers, 1):
+                cell = ws.cell(row=start_row, column=col_num, value=h_text)
+                cell.font = header_font
+                cell.fill = header_fill
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
                 cell.border = thin_border
-            ws.row_dimensions[row_idx].height = 26
+            ws.row_dimensions[start_row].height = 28
 
-            # 3. Isi Data
-            currency_format = '"Rp"#,##0'
-            row_idx = 6
-            for item in items:
-                ws.cell(row=row_idx, column=1, value=item["no"]).alignment = Alignment(horizontal="center")
-                ws.cell(row=row_idx, column=2, value=item["unit"]).alignment = Alignment(horizontal="left")
-                ws.cell(row=row_idx, column=3, value=item.get("no_id") or item.get("nik") or item.get("emp_num") or "-").alignment = Alignment(horizontal="center")
-                ws.cell(row=row_idx, column=4, value=item["nama"]).alignment = Alignment(horizontal="left")
-                ws.cell(row=row_idx, column=5, value=item["status"]).alignment = Alignment(horizontal="center")
+            current_row = start_row + 1
+            for r in rows:
+                ws.cell(row=current_row, column=1, value=r["no"]).alignment = Alignment(horizontal="center")
+                ws.cell(row=current_row, column=2, value=r["unit"]).alignment = Alignment(horizontal="left")
+                ws.cell(row=current_row, column=3, value=r["nama"]).alignment = Alignment(horizontal="left")
+                ws.cell(row=current_row, column=4, value=r["status"]).alignment = Alignment(horizontal="center")
+                
+                # Nilai Finansial (Format Rupiah Integer)
+                c5 = ws.cell(row=current_row, column=5, value=r["terlambat"])
+                c6 = ws.cell(row=current_row, column=6, value=r["pulang_cepat"])
+                c7 = ws.cell(row=current_row, column=7, value=r["tidak_absen_masuk"])
+                c8 = ws.cell(row=current_row, column=8, value=r["tidak_absen_pulang"])
+                c9 = ws.cell(row=current_row, column=9, value=r["jumlah_potongan_absensi"])
 
-                # Kolom Nominal
-                for c_idx, val in enumerate([
-                    item["terlambat"], item["pulang_cepat"],
-                    item["tidak_absen_masuk"], item["tidak_absen_pulang"],
-                    item["jumlah_potongan"]
-                ], start=6):
-                    c = ws.cell(row=row_idx, column=c_idx, value=val)
-                    c.number_format = currency_format
-                    c.alignment = Alignment(horizontal="right")
+                for col_idx, c_val in [(5, c5), (6, c6), (7, c7), (8, c8), (9, c9)]:
+                    c_val.number_format = '#,##0'
+                    c_val.alignment = Alignment(horizontal="right")
 
-                for c_idx in range(1, 11):
-                    ws.cell(row=row_idx, column=c_idx).font = font_regular
-                    ws.cell(row=row_idx, column=c_idx).border = thin_border
-                row_idx += 1
+                for c_i in range(1, 10):
+                    cell = ws.cell(row=current_row, column=c_i)
+                    cell.font = regular_font
+                    cell.border = thin_border
 
-            # 4. Baris Grand Total
-            ws.cell(row=row_idx, column=1, value="TOTAL KESELURUHAN")
-            ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=5)
-            ws.cell(row=row_idx, column=1).alignment = Alignment(horizontal="center")
+                current_row += 1
 
-            totals_to_write = [
-                grand_total.get("total_terlambat", 0),
-                grand_total.get("total_pulang_cepat", 0),
-                grand_total.get("total_tidak_absen_masuk", 0),
-                grand_total.get("total_tidak_absen_pulang", 0),
-                grand_total.get("total_potongan_keseluruhan", 0),
+            # Baris Grand Total
+            ws.cell(row=current_row, column=1, value="").border = double_bottom
+            ws.cell(row=current_row, column=2, value="").border = double_bottom
+            ws.cell(row=current_row, column=3, value="GRAND TOTAL KESELURUHAN").alignment = Alignment(horizontal="left")
+            ws.cell(row=current_row, column=4, value=f"{grand_total['karyawan_count']} Orang").alignment = Alignment(horizontal="center")
+
+            gt_cols = [
+                (5, grand_total["terlambat"]),
+                (6, grand_total["pulang_cepat"]),
+                (7, grand_total["tidak_absen_masuk"]),
+                (8, grand_total["tidak_absen_pulang"]),
+                (9, grand_total["total_potongan"]),
             ]
-            for c_idx, val in enumerate(totals_to_write, start=6):
-                c = ws.cell(row=row_idx, column=c_idx, value=val)
-                c.number_format = currency_format
-                c.alignment = Alignment(horizontal="right")
+            for col_idx, val in gt_cols:
+                cell = ws.cell(row=current_row, column=col_idx, value=val)
+                cell.number_format = '#,##0'
+                cell.alignment = Alignment(horizontal="right")
 
-            for c_idx in range(1, 11):
-                ws.cell(row=row_idx, column=c_idx).font = font_bold
-                ws.cell(row=row_idx, column=c_idx).fill = soft_blue_fill
-                ws.cell(row=row_idx, column=c_idx).border = double_bottom
-            ws.row_dimensions[row_idx].height = 22
+            for c_i in range(1, 10):
+                cell = ws.cell(row=current_row, column=c_i)
+                cell.font = bold_font
+                cell.fill = total_fill
+                cell.border = double_bottom
 
-            # 5. Sesuaikan Lebar Kolom
-            col_widths = {
-                1: 6, 2: 18, 3: 16, 4: 26, 5: 12,
-                6: 18, 7: 18, 8: 24, 9: 24, 10: 24
-            }
-            for col_idx, width in col_widths.items():
-                ws.column_dimensions[get_column_letter(col_idx)].width = width
+            ws.row_dimensions[current_row].height = 24
 
+            # Atur Lebar Kolom Otomatis
+            col_widths = {1: 6, 2: 24, 3: 30, 4: 12, 5: 16, 6: 18, 7: 20, 8: 20, 9: 22}
+            for col_idx, w in col_widths.items():
+                ws.column_dimensions[get_column_letter(col_idx)].width = w
+
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
             wb.save(output_path)
-            logger.info(f"Berhasil mengekspor rekap potongan Excel ke {output_path}")
+            logger.info(f"Export rekap potongan Excel sukses: {output_path}")
             return output_path
 
-        except ImportError:
-            logger.warning("openpyxl belum terpasang. Menggunakan fallback CSV format.")
-            import csv
-            with open(output_path.replace(".xlsx", ".csv"), "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(["No", "Unit", "Nama", "Status", "Terlambat", "Pulang Cepat", "Tidak Absen Masuk", "Tidak Absen Pulang", "Jumlah Potongan"])
-                for item in items:
-                    writer.writerow([
-                        item["no"], item["unit"], item["nama"], item["status"],
-                        item["terlambat"], item["pulang_cepat"],
-                        item["tidak_absen_masuk"], item["tidak_absen_pulang"],
-                        item["jumlah_potongan"]
-                    ])
-            return output_path
+        except Exception as e:
+            logger.error(f"Gagal export Excel rekap potongan: {e}", exc_info=True)
+            # Fallback CSV
+            import pandas as pd
+            df = pd.DataFrame(rows)
+            csv_path = output_path.replace(".xlsx", ".csv")
+            df.to_csv(csv_path, index=False)
+            return csv_path
 
-    # =========================================================================
-    # EKSPOR DETAIL ABSENSI & POTONGAN HARIAN KE EXCEL
-    # =========================================================================
     @classmethod
     def export_detail_absensi_excel(
         cls,
-        detail_rows: List[Dict[str, Any]],
         year: int,
         month: int,
-        unit: Optional[str],
-        output_path: str,
+        unit: Optional[str] = None,
+        attendance_status: Optional[str] = None,
+        output_path: Optional[str] = None,
+        user_name: str = "ADMIN",
     ) -> str:
         """
-        Mengekspor data rincian harian ke format Excel (.xlsx) dengan 17 kolom lengkap.
+        Mengekspor Laporan Detail Absensi & Potongan Harian ke format Excel (.xlsx).
+        Kolom lengkap per hari kerja dan absensi karyawan.
         """
-        cls._ensure_directory(output_path)
+        report_data = DeductionCalculationService.get_daily_deduction_report(
+            year=year,
+            month=month,
+            unit=unit,
+            attendance_status=attendance_status,
+            page=1,
+            page_size=10000,  # Ambil seluruh data untuk export
+        )
+        records = report_data["records"]
+
+        if not output_path:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"Detail_Absensi_Harian_{year}_{month:02d}_{timestamp}.xlsx"
+            output_path = os.path.join(EXPORT_DIR, filename)
+
         try:
-            from openpyxl import Workbook
+            import openpyxl
             from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
             from openpyxl.utils import get_column_letter
 
-            wb = Workbook()
+            wb = openpyxl.Workbook()
             ws = wb.active
-            ws.title = f"Detail Harian {month:02d}-{year}"
+            ws.title = f"Detail Absensi {month:02d}-{year}"
+            ws.views.sheetView[0].showGridLines = True
 
-            navy_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
-            soft_blue_fill = PatternFill(start_color="DBEAFE", end_color="DBEAFE", fill_type="solid")
-            font_title = Font(name="Calibri", size=15, bold=True, color="1E3A8A")
-            font_header = Font(name="Calibri", size=9, bold=True, color="FFFFFF")
-            font_bold = Font(name="Calibri", size=9, bold=True)
-            font_regular = Font(name="Calibri", size=9)
-
+            title_font = Font(name="Calibri", size=14, bold=True, color="1E3A8A")
+            sub_font = Font(name="Calibri", size=10, bold=False, color="475569")
+            header_font = Font(name="Calibri", size=9, bold=True, color="FFFFFF")
+            regular_font = Font(name="Calibri", size=9)
+            header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
             thin_border = Border(
                 left=Side(style="thin", color="CBD5E1"),
                 right=Side(style="thin", color="CBD5E1"),
@@ -214,395 +227,374 @@ class ExportService:
                 bottom=Side(style="thin", color="CBD5E1"),
             )
 
-            # Header Dokumen
-            ws["A1"] = "DATA ABSENSI DAN RINCIAN POTONGAN HARIAN"
-            ws["A1"].font = font_title
-            ws["A2"] = f"Periode: Bulan {month:02d}/{year} | Unit: {unit or 'SEMUA UNIT'} | Total Record: {len(detail_rows)}"
-            ws["A2"].font = Font(name="Calibri", size=10, italic=True, color="475569")
+            ws["A1"] = "SISTEM INFORMASI ADMINISTRASI PRESENSI (SIAP)"
+            ws["A1"].font = title_font
+            ws["A2"] = f"LAPORAN DATA ABSENSI DAN POTONGAN HARIAN - PERIODE {month:02d}/{year}"
+            ws["A2"].font = Font(name="Calibri", size=12, bold=True, color="0F172A")
+            ws["A3"] = f"Total Data: {len(records)} baris | Operator: {user_name} | Tanggal Cetak: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+            ws["A3"].font = sub_font
 
+            start_row = 5
             headers = [
-                "No", "Unit", "Nama", "Hari", "Tanggal",
-                "Jam Masuk", "Jam Pulang", "Status Masuk", "Status Pulang", "Status Kehadiran",
-                "Menit Tlbt", "Menit PC", "Potongan Tlbt (Rp)", "Potongan PC (Rp)",
-                "Tdk Absen Masuk (Rp)", "Tdk Absen Pulang (Rp)", "Total Potongan (Rp)"
+                "No", "Unit", "Nama", "Hari", "Tanggal", "Jam Masuk", "Jam Pulang",
+                "Status Masuk", "Status Pulang", "Status Kehadiran",
+                "Menit Tlb", "Menit PC", "Pot. Terlambat", "Pot. Pulang Cepat",
+                "Tdk Absen Masuk", "Tdk Absen Pulang", "Total Potongan"
             ]
-            row_idx = 4
-            for col_idx, header in enumerate(headers, start=1):
-                cell = ws.cell(row=row_idx, column=col_idx, value=header)
-                cell.font = font_header
-                cell.fill = navy_fill
+
+            for col_num, h_text in enumerate(headers, 1):
+                cell = ws.cell(row=start_row, column=col_num, value=h_text)
+                cell.font = header_font
+                cell.fill = header_fill
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
                 cell.border = thin_border
-            ws.row_dimensions[row_idx].height = 28
+            ws.row_dimensions[start_row].height = 26
 
-            currency_fmt = '"Rp"#,##0'
-            row_idx = 5
-            total_late = 0
-            total_pc = 0
-            total_miss_in = 0
-            total_miss_out = 0
-            total_all = 0
+            current_row = start_row + 1
+            for r in records:
+                ws.cell(row=current_row, column=1, value=r["no"]).alignment = Alignment(horizontal="center")
+                ws.cell(row=current_row, column=2, value=r["unit"]).alignment = Alignment(horizontal="left")
+                ws.cell(row=current_row, column=3, value=r["nama"]).alignment = Alignment(horizontal="left")
+                ws.cell(row=current_row, column=4, value=r["hari"]).alignment = Alignment(horizontal="center")
+                ws.cell(row=current_row, column=5, value=r["tanggal"]).alignment = Alignment(horizontal="center")
+                ws.cell(row=current_row, column=6, value=r["jam_masuk"]).alignment = Alignment(horizontal="center")
+                ws.cell(row=current_row, column=7, value=r["jam_pulang"]).alignment = Alignment(horizontal="center")
+                ws.cell(row=current_row, column=8, value=r["status_masuk"]).alignment = Alignment(horizontal="center")
+                ws.cell(row=current_row, column=9, value=r["status_pulang"]).alignment = Alignment(horizontal="center")
+                ws.cell(row=current_row, column=10, value=r["status_kehadiran"]).alignment = Alignment(horizontal="center")
 
-            for r in detail_rows:
-                ws.cell(row=row_idx, column=1, value=r["no"]).alignment = Alignment(horizontal="center")
-                ws.cell(row=row_idx, column=2, value=r["unit"])
-                ws.cell(row=row_idx, column=3, value=r["nama"])
-                ws.cell(row=row_idx, column=4, value=r["hari"]).alignment = Alignment(horizontal="center")
-                ws.cell(row=row_idx, column=5, value=r["tanggal"]).alignment = Alignment(horizontal="center")
-                ws.cell(row=row_idx, column=6, value=r["jam_masuk"]).alignment = Alignment(horizontal="center")
-                ws.cell(row=row_idx, column=7, value=r["jam_pulang"]).alignment = Alignment(horizontal="center")
-                ws.cell(row=row_idx, column=8, value=r["status_masuk"]).alignment = Alignment(horizontal="center")
-                ws.cell(row=row_idx, column=9, value=r["status_pulang"]).alignment = Alignment(horizontal="center")
-                ws.cell(row=row_idx, column=10, value=r["status_kehadiran"]).alignment = Alignment(horizontal="center")
-                ws.cell(row=row_idx, column=11, value=r["menit_terlambat"]).alignment = Alignment(horizontal="right")
-                ws.cell(row=row_idx, column=12, value=r["menit_pulang_cepat"]).alignment = Alignment(horizontal="right")
+                # Kolom numerik & finansial
+                ws.cell(row=current_row, column=11, value=r["menit_terlambat"]).alignment = Alignment(horizontal="right")
+                ws.cell(row=current_row, column=12, value=r["menit_pulang_cepat"]).alignment = Alignment(horizontal="right")
 
-                c13 = ws.cell(row=row_idx, column=13, value=r["potongan_terlambat"])
-                c13.number_format = currency_fmt
-                c13.alignment = Alignment(horizontal="right")
+                for c_i, val in [
+                    (13, r["potongan_terlambat"]),
+                    (14, r["potongan_pulang_cepat"]),
+                    (15, r["tidak_absen_masuk"]),
+                    (16, r["tidak_absen_pulang"]),
+                    (17, r["total_potongan_per_hari"]),
+                ]:
+                    cell = ws.cell(row=current_row, column=c_i, value=val)
+                    cell.number_format = '#,##0'
+                    cell.alignment = Alignment(horizontal="right")
 
-                c14 = ws.cell(row=row_idx, column=14, value=r["potongan_pulang_cepat"])
-                c14.number_format = currency_fmt
-                c14.alignment = Alignment(horizontal="right")
+                for c_i in range(1, 18):
+                    cell = ws.cell(row=current_row, column=c_i)
+                    cell.font = regular_font
+                    cell.border = thin_border
 
-                c15 = ws.cell(row=row_idx, column=15, value=r["tidak_absen_masuk"])
-                c15.number_format = currency_fmt
-                c15.alignment = Alignment(horizontal="right")
+                current_row += 1
 
-                c16 = ws.cell(row=row_idx, column=16, value=r["tidak_absen_pulang"])
-                c16.number_format = currency_fmt
-                c16.alignment = Alignment(horizontal="right")
+            # Auto Width
+            col_widths = {
+                1: 5, 2: 20, 3: 26, 4: 10, 5: 12, 6: 10, 7: 10,
+                8: 12, 9: 12, 10: 16, 11: 10, 12: 10,
+                13: 14, 14: 14, 15: 15, 16: 15, 17: 16
+            }
+            for col_idx, w in col_widths.items():
+                ws.column_dimensions[get_column_letter(col_idx)].width = w
 
-                c17 = ws.cell(row=row_idx, column=17, value=r["total_potongan"])
-                c17.number_format = currency_fmt
-                c17.alignment = Alignment(horizontal="right")
-
-                total_late += r["potongan_terlambat"]
-                total_pc += r["potongan_pulang_cepat"]
-                total_miss_in += r["tidak_absen_masuk"]
-                total_miss_out += r["tidak_absen_pulang"]
-                total_all += r["total_potongan"]
-
-                for c_idx in range(1, 18):
-                    ws.cell(row=row_idx, column=c_idx).font = font_regular
-                    ws.cell(row=row_idx, column=c_idx).border = thin_border
-                row_idx += 1
-
-            # Grand Total
-            ws.cell(row=row_idx, column=1, value="TOTAL")
-            ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=12)
-            ws.cell(row=row_idx, column=1).alignment = Alignment(horizontal="center")
-
-            for c_idx, val in enumerate([total_late, total_pc, total_miss_in, total_miss_out, total_all], start=13):
-                c = ws.cell(row=row_idx, column=c_idx, value=val)
-                c.number_format = currency_fmt
-                c.alignment = Alignment(horizontal="right")
-
-            for c_idx in range(1, 18):
-                ws.cell(row=row_idx, column=c_idx).font = font_bold
-                ws.cell(row=row_idx, column=c_idx).fill = soft_blue_fill
-                ws.cell(row=row_idx, column=c_idx).border = thin_border
-
-            # Lebar Kolom
-            widths = [5, 14, 22, 10, 12, 10, 10, 14, 14, 16, 10, 10, 15, 15, 18, 18, 18]
-            for c_idx, w in enumerate(widths, start=1):
-                ws.column_dimensions[get_column_letter(c_idx)].width = w
-
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
             wb.save(output_path)
-            logger.info(f"Berhasil mengekspor detail absensi Excel ke {output_path}")
+            logger.info(f"Export detail absensi Excel sukses: {output_path}")
             return output_path
 
-        except ImportError:
-            logger.warning("openpyxl belum terpasang.")
-            return output_path
+        except Exception as e:
+            logger.error(f"Gagal export Excel detail absensi: {e}", exc_info=True)
+            import pandas as pd
+            df = pd.DataFrame(records)
+            csv_path = output_path.replace(".xlsx", ".csv")
+            df.to_csv(csv_path, index=False)
+            return csv_path
 
-    # =========================================================================
-    # EKSPOR KE FORMAT PDF MENGGUNAKAN REPORTLAB
-    # =========================================================================
     @classmethod
     def export_rekap_potongan_pdf(
         cls,
-        rekap_data: Dict[str, Any],
-        user_name: str,
-        output_path: str,
+        year: int,
+        month: int,
+        unit: Optional[str] = None,
+        output_path: Optional[str] = None,
+        user_name: str = "ADMIN",
     ) -> str:
         """
-        Mengekspor rekapitulasi bulanan ke dokumen PDF resmi berorientasi landscape.
+        Mengekspor Rekapitulasi Potongan Bulanan ke format Dokumen PDF resmi (.pdf).
+        Menggunakan ReportLab (SimpleDocTemplate, Table, TableStyle, Paragraph).
         """
-        cls._ensure_directory(output_path)
-        year = rekap_data.get("year", datetime.now().year)
-        month = rekap_data.get("month", datetime.now().month)
-        unit = rekap_data.get("unit_filter", "SEMUA UNIT")
-        items = rekap_data.get("items", [])
-        grand_total = rekap_data.get("grand_total", {})
+        recap_data = DeductionCalculationService.get_monthly_deduction_recap(year, month, unit)
+        rows = recap_data["rows"]
+        grand_total = recap_data["grand_total"]
+
+        if not output_path:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"Rekap_Potongan_Absensi_{year}_{month:02d}_{timestamp}.pdf"
+            output_path = os.path.join(EXPORT_DIR, filename)
 
         try:
-            from reportlab.lib.pagesizes import letter, landscape
+            from reportlab.lib.pagesizes import A4, landscape
             from reportlab.lib import colors
             from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
             from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+            # Orientasi Landscape untuk tabel lebar
             doc = SimpleDocTemplate(
                 output_path,
-                pagesize=landscape(letter),
+                pagesize=landscape(A4),
                 rightMargin=24,
                 leftMargin=24,
                 topMargin=24,
                 bottomMargin=24,
             )
 
+            elements = []
             styles = getSampleStyleSheet()
+
+            # Header Dokumen Resmi
             title_style = ParagraphStyle(
                 "TitleStyle",
-                parent=styles["Heading1"],
+                parent=styles["Normal"],
                 fontName="Helvetica-Bold",
                 fontSize=14,
+                leading=18,
                 textColor=colors.HexColor("#1E3A8A"),
-                spaceAfter=4,
+                alignment=0,
             )
-            subtitle_style = ParagraphStyle(
-                "SubTitleStyle",
+            sub_style = ParagraphStyle(
+                "SubStyle",
                 parent=styles["Normal"],
                 fontName="Helvetica",
                 fontSize=9,
+                leading=12,
                 textColor=colors.HexColor("#475569"),
-                spaceAfter=12,
-            )
-            cell_header_style = ParagraphStyle(
-                "HeaderStyle",
-                parent=styles["Normal"],
-                fontName="Helvetica-Bold",
-                fontSize=8,
-                textColor=colors.white,
-                alignment=1,  # Center
-            )
-            cell_body_style = ParagraphStyle(
-                "BodyStyle",
-                parent=styles["Normal"],
-                fontName="Helvetica",
-                fontSize=8,
-                textColor=colors.HexColor("#0F172A"),
-            )
-            cell_right_style = ParagraphStyle(
-                "RightStyle",
-                parent=styles["Normal"],
-                fontName="Helvetica",
-                fontSize=8,
-                textColor=colors.HexColor("#0F172A"),
-                alignment=2,  # Right
-            )
-            cell_bold_right_style = ParagraphStyle(
-                "BoldRightStyle",
-                parent=styles["Normal"],
-                fontName="Helvetica-Bold",
-                fontSize=8,
-                textColor=colors.HexColor("#0F172A"),
-                alignment=2,  # Right
+                alignment=0,
             )
 
-            elements = []
-
-            # 1. Judul Header
             elements.append(Paragraph("SISTEM INFORMASI ADMINISTRASI PRESENSI (SIAP)", title_style))
+            elements.append(Paragraph(f"REKAPITULASI DATA POTONGAN ABSENSI KARYAWAN - PERIODE {month:02d}/{year}", title_style))
             elements.append(Paragraph(
-                f"REKAPITULASI DATA POTONGAN ABSENSI KARYAWAN | Periode: {month:02d}/{year} | Unit: {unit} | Dicetak oleh: {user_name} ({datetime.now().strftime('%d/%m/%Y %H:%M')})",
-                subtitle_style,
+                f"Unit: {unit or 'Semua Unit'} | Total Karyawan: {len(rows)} orang | "
+                f"Tanggal Cetak: {datetime.now().strftime('%d/%m/%Y %H:%M')} | Dicetak oleh: {user_name}",
+                sub_style
             ))
+            elements.append(Spacer(1, 14))
 
-            # 2. Tabel Data
-            table_data = [[
-                Paragraph("<b>No</b>", cell_header_style),
-                Paragraph("<b>Unit</b>", cell_header_style),
-                Paragraph("<b>Nama</b>", cell_header_style),
-                Paragraph("<b>Status</b>", cell_header_style),
-                Paragraph("<b>Terlambat</b>", cell_header_style),
-                Paragraph("<b>Pulang Cepat</b>", cell_header_style),
-                Paragraph("<b>Tdk Absen Masuk</b>", cell_header_style),
-                Paragraph("<b>Tdk Absen Pulang</b>", cell_header_style),
-                Paragraph("<b>Total Potongan</b>", cell_header_style),
-            ]]
+            # Susun Tabel
+            table_data = [
+                [
+                    "No",
+                    "Unit Kerja",
+                    "Nama Karyawan",
+                    "Status",
+                    "Terlambat",
+                    "Pulang Cepat",
+                    "Tdk Absen Masuk",
+                    "Tdk Absen Pulang",
+                    "Total Potongan",
+                ]
+            ]
 
-            for it in items:
+            cell_style = ParagraphStyle("Cell", parent=styles["Normal"], fontName="Helvetica", fontSize=8, leading=10)
+            bold_cell_style = ParagraphStyle("BCell", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=8, leading=10)
+
+            for r in rows:
                 table_data.append([
-                    Paragraph(str(it["no"]), cell_body_style),
-                    Paragraph(str(it["unit"]), cell_body_style),
-                    Paragraph(str(it["nama"]), cell_body_style),
-                    Paragraph(str(it["status"]), cell_body_style),
-                    Paragraph(f"Rp{it['terlambat']:,}", cell_right_style),
-                    Paragraph(f"Rp{it['pulang_cepat']:,}", cell_right_style),
-                    Paragraph(f"Rp{it['tidak_absen_masuk']:,}", cell_right_style),
-                    Paragraph(f"Rp{it['tidak_absen_pulang']:,}", cell_right_style),
-                    Paragraph(f"Rp{it['jumlah_potongan']:,}", cell_bold_right_style),
+                    str(r["no"]),
+                    Paragraph(r["unit"], cell_style),
+                    Paragraph(r["nama"], cell_style),
+                    r["status"],
+                    f"Rp{r['terlambat']:,}",
+                    f"Rp{r['pulang_cepat']:,}",
+                    f"Rp{r['tidak_absen_masuk']:,}",
+                    f"Rp{r['tidak_absen_pulang']:,}",
+                    f"Rp{r['jumlah_potongan_absensi']:,}",
                 ])
 
             # Baris Total
             table_data.append([
-                Paragraph("<b>TOTAL KESELURUHAN</b>", cell_body_style),
-                "", "", "",
-                Paragraph(f"Rp{grand_total.get('total_terlambat', 0):,}", cell_bold_right_style),
-                Paragraph(f"Rp{grand_total.get('total_pulang_cepat', 0):,}", cell_bold_right_style),
-                Paragraph(f"Rp{grand_total.get('total_tidak_absen_masuk', 0):,}", cell_bold_right_style),
-                Paragraph(f"Rp{grand_total.get('total_tidak_absen_pulang', 0):,}", cell_bold_right_style),
-                Paragraph(f"Rp{grand_total.get('total_potongan_keseluruhan', 0):,}", cell_bold_right_style),
+                "",
+                "",
+                Paragraph("GRAND TOTAL KESELURUHAN", bold_cell_style),
+                f"{grand_total['karyawan_count']} Org",
+                f"Rp{grand_total['terlambat']:,}",
+                f"Rp{grand_total['pulang_cepat']:,}",
+                f"Rp{grand_total['tidak_absen_masuk']:,}",
+                f"Rp{grand_total['tidak_absen_pulang']:,}",
+                f"Rp{grand_total['total_potongan']:,}",
             ])
 
-            col_widths = [24, 70, 130, 60, 75, 75, 95, 95, 95]
-            table = Table(table_data, colWidths=col_widths, repeatRows=1)
-            t_style = [
+            # Lebar Kolom
+            col_widths = [24, 110, 150, 60, 80, 80, 90, 90, 100]
+
+            t = Table(table_data, colWidths=col_widths, repeatRows=1)
+            t.setStyle(TableStyle([
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A8A")),
-                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, 0), 8),
+                ("ALIGN", (0, 0), (0, -1), "CENTER"),      # No
+                ("ALIGN", (3, 0), (3, -1), "CENTER"),      # Status
+                ("ALIGN", (4, 0), (-1, -1), "RIGHT"),      # Nilai Finansial
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
-                ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#1E3A8A")),
-                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#DBEAFE")),
-                ("SPAN", (0, -1), (3, -1)),
-                ("ALIGN", (0, -1), (3, -1), "CENTER"),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#EFF6FF")),
+                ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+                ("LINEABOVE", (0, -1), (-1, -1), 1.2, colors.HexColor("#0F172A")),
+            ]))
+
+            elements.append(t)
+            elements.append(Spacer(1, 20))
+
+            # Tanda Tangan Pengesahan
+            sign_data = [
+                ["Mengetahui,", "", "Dibuat oleh,"],
+                ["Kepala Sub Bagian Kepegawaian & Umum", "", "Operator Pengelola Presensi"],
+                ["\n\n\n\n( ___________________________ )", "", f"\n\n\n\n( {user_name} )"],
             ]
-            # Striping rows
-            for i in range(1, len(table_data) - 1):
-                if i % 2 == 0:
-                    t_style.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#F8FAFC")))
-            table.setStyle(TableStyle(t_style))
-            elements.append(table)
+            sign_table = Table(sign_data, colWidths=[240, 300, 240])
+            sign_table.setStyle(TableStyle([
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ]))
+            elements.append(sign_table)
 
             doc.build(elements)
-            logger.info(f"Berhasil membuat dokumen PDF rekap potongan: {output_path}")
+            logger.info(f"Export PDF rekap potongan sukses: {output_path}")
             return output_path
 
-        except ImportError:
-            logger.warning("reportlab belum terpasang.")
-            return output_path
+        except Exception as e:
+            logger.error(f"Gagal export PDF rekap potongan: {e}", exc_info=True)
+            # Buat file teks informatif sebagai fallback jika reportlab terkendala
+            txt_path = output_path.replace(".pdf", ".txt")
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write(f"REKAPITULASI POTONGAN ABSENSI {month:02d}/{year}\n")
+                f.write(f"Total Potongan: Rp{grand_total['total_potongan']:,}\n")
+            return txt_path
 
     @classmethod
     def export_detail_absensi_pdf(
         cls,
-        detail_rows: List[Dict[str, Any]],
         year: int,
         month: int,
-        unit: Optional[str],
-        user_name: str,
-        output_path: str,
+        unit: Optional[str] = None,
+        attendance_status: Optional[str] = None,
+        output_path: Optional[str] = None,
+        user_name: str = "ADMIN",
     ) -> str:
         """
-        Mengekspor laporan rincian absensi harian ke format PDF landscape.
+        Mengekspor Laporan Detail Harian ke PDF.
         """
-        cls._ensure_directory(output_path)
+        report_data = DeductionCalculationService.get_daily_deduction_report(
+            year=year,
+            month=month,
+            unit=unit,
+            attendance_status=attendance_status,
+            page=1,
+            page_size=200,  # Batasi per lembar PDF untuk performa cetak
+        )
+        records = report_data["records"]
+
+        if not output_path:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"Detail_Absensi_Harian_{year}_{month:02d}_{timestamp}.pdf"
+            output_path = os.path.join(EXPORT_DIR, filename)
+
         try:
-            from reportlab.lib.pagesizes import letter, landscape
+            from reportlab.lib.pagesizes import A4, landscape
             from reportlab.lib import colors
-            from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
             from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
             doc = SimpleDocTemplate(
                 output_path,
-                pagesize=landscape(letter),
+                pagesize=landscape(A4),
                 rightMargin=20,
                 leftMargin=20,
                 topMargin=20,
                 bottomMargin=20,
             )
 
+            elements = []
             styles = getSampleStyleSheet()
+
             title_style = ParagraphStyle(
                 "TitleStyle",
-                parent=styles["Heading1"],
+                parent=styles["Normal"],
                 fontName="Helvetica-Bold",
                 fontSize=13,
+                leading=16,
                 textColor=colors.HexColor("#1E3A8A"),
-                spaceAfter=3,
             )
-            subtitle_style = ParagraphStyle(
-                "SubTitleStyle",
+            sub_style = ParagraphStyle(
+                "SubStyle",
                 parent=styles["Normal"],
                 fontName="Helvetica",
                 fontSize=8,
+                leading=11,
                 textColor=colors.HexColor("#475569"),
-                spaceAfter=8,
-            )
-            cell_header_style = ParagraphStyle(
-                "HeaderStyle",
-                parent=styles["Normal"],
-                fontName="Helvetica-Bold",
-                fontSize=7,
-                textColor=colors.white,
-                alignment=1,
-            )
-            cell_body_style = ParagraphStyle(
-                "BodyStyle",
-                parent=styles["Normal"],
-                fontName="Helvetica",
-                fontSize=7,
-                textColor=colors.HexColor("#0F172A"),
-            )
-            cell_right_style = ParagraphStyle(
-                "RightStyle",
-                parent=styles["Normal"],
-                fontName="Helvetica",
-                fontSize=7,
-                textColor=colors.HexColor("#0F172A"),
-                alignment=2,
             )
 
-            elements = []
-            elements.append(Paragraph("DATA ABSENSI DAN RINCIAN POTONGAN HARIAN (SIAP)", title_style))
+            elements.append(Paragraph("SISTEM INFORMASI ADMINISTRASI PRESENSI (SIAP)", title_style))
+            elements.append(Paragraph(f"LAPORAN DATA DETAIL PRESENSI DAN POTONGAN HARIAN - {month:02d}/{year}", title_style))
             elements.append(Paragraph(
-                f"Periode: Bulan {month:02d}/{year} | Unit: {unit or 'SEMUA UNIT'} | Dicetak oleh: {user_name} | {len(detail_rows)} data",
-                subtitle_style,
+                f"Data Ditampilkan: {len(records)} baris | Operator: {user_name} | Tanggal: {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+                sub_style
             ))
+            elements.append(Spacer(1, 10))
 
             headers = [
-                "No", "Unit", "Nama", "Tgl", "Masuk", "Pulang",
-                "Status", "Tlbt", "PC", "Pot. Tlbt", "Pot. PC", "Tdk Masuk", "Tdk Pulang", "Total"
+                "No", "Unit", "Nama", "Hari", "Tanggal", "Masuk", "Pulang",
+                "Status Kehadiran", "Tlb (m)", "PC (m)", "Pot. Tlb", "Pot. PC", "Tdk In/Out", "Total Potongan"
             ]
-            table_data = [[Paragraph(f"<b>{h}</b>", cell_header_style) for h in headers]]
 
-            total_pot = 0
-            for r in detail_rows:
+            table_data = [headers]
+            cell_style = ParagraphStyle("C", parent=styles["Normal"], fontName="Helvetica", fontSize=7, leading=9)
+
+            for r in records:
+                tdk_in_out = r["tidak_absen_masuk"] + r["tidak_absen_pulang"]
                 table_data.append([
-                    Paragraph(str(r["no"]), cell_body_style),
-                    Paragraph(str(r["unit"]), cell_body_style),
-                    Paragraph(str(r["nama"]), cell_body_style),
-                    Paragraph(str(r["tanggal"])[8:], cell_body_style),
-                    Paragraph(str(r["jam_masuk"]), cell_body_style),
-                    Paragraph(str(r["jam_pulang"]), cell_body_style),
-                    Paragraph(str(r["status_kehadiran"])[:10], cell_body_style),
-                    Paragraph(f"{r['menit_terlambat']}m", cell_right_style),
-                    Paragraph(f"{r['menit_pulang_cepat']}m", cell_right_style),
-                    Paragraph(f"Rp{r['potongan_terlambat']:,}", cell_right_style),
-                    Paragraph(f"Rp{r['potongan_pulang_cepat']:,}", cell_right_style),
-                    Paragraph(f"Rp{r['tidak_absen_masuk']:,}", cell_right_style),
-                    Paragraph(f"Rp{r['tidak_absen_pulang']:,}", cell_right_style),
-                    Paragraph(f"<b>Rp{r['total_potongan']:,}</b>", cell_right_style),
+                    str(r["no"]),
+                    Paragraph(r["unit"], cell_style),
+                    Paragraph(r["nama"], cell_style),
+                    r["hari"],
+                    r["tanggal"],
+                    r["jam_masuk"],
+                    r["jam_pulang"],
+                    r["status_kehadiran"],
+                    str(r["menit_terlambat"]),
+                    str(r["menit_pulang_cepat"]),
+                    f"{r['potongan_terlambat']:,}",
+                    f"{r['potongan_pulang_cepat']:,}",
+                    f"{tdk_in_out:,}",
+                    f"{r['total_potongan_per_hari']:,}",
                 ])
-                total_pot += r["total_potongan"]
 
-            # Baris Total
-            table_data.append([
-                Paragraph("<b>TOTAL POTONGAN KESELURUHAN</b>", cell_body_style),
-                "", "", "", "", "", "", "", "", "", "", "", "",
-                Paragraph(f"<b>Rp{total_pot:,}</b>", cell_right_style),
-            ])
-
-            widths = [20, 55, 95, 30, 36, 36, 60, 30, 30, 50, 50, 55, 55, 60]
-            t = Table(table_data, colWidths=widths, repeatRows=1)
-            t_style = [
+            col_widths = [20, 80, 110, 45, 55, 40, 40, 85, 38, 38, 55, 55, 60, 65]
+            t = Table(table_data, colWidths=col_widths, repeatRows=1)
+            t.setStyle(TableStyle([
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A8A")),
-                ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
-                ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#1E3A8A")),
-                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#DBEAFE")),
-                ("SPAN", (0, -1), (12, -1)),
-                ("ALIGN", (0, -1), (12, -1), "CENTER"),
-            ]
-            for i in range(1, len(table_data) - 1):
-                if i % 2 == 0:
-                    t_style.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#F8FAFC")))
-            t.setStyle(TableStyle(t_style))
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, 0), 7),
+                ("ALIGN", (0, 0), (0, -1), "CENTER"),
+                ("ALIGN", (3, 0), (7, -1), "CENTER"),
+                ("ALIGN", (8, 0), (-1, -1), "RIGHT"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+            ]))
+
             elements.append(t)
-
             doc.build(elements)
-            logger.info(f"Berhasil membuat dokumen PDF detail absensi: {output_path}")
+            logger.info(f"Export PDF detail harian sukses: {output_path}")
             return output_path
 
-        except ImportError:
-            logger.warning("reportlab belum terpasang.")
-            return output_path
+        except Exception as e:
+            logger.error(f"Gagal export PDF detail harian: {e}", exc_info=True)
+            txt_path = output_path.replace(".pdf", ".txt")
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write(f"DETAIL PRESENSI DAN POTONGAN {month:02d}/{year}\n")
+                f.write(f"Total record: {len(records)}\n")
+            return txt_path

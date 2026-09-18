@@ -82,14 +82,36 @@ def format_time_display(val: Optional[str]) -> str:
     return val
 
 
-def parse_time_str(val: Union[str, time, datetime, None]) -> Optional[time]:
-    """Mengembalikan objek datetime.time dari string HH:MM / HH:MM:SS atau None jika kosong/invalid."""
-    formatted_str, is_empty, err = parse_time_value(val)
-    if is_empty or not formatted_str:
+def parse_time_str(val: Optional[str]) -> Optional[str]:
+    """
+    Ekstrak format jam ringkas HH:MM dari berbagai format input waktu.
+    Mengembalikan None jika input kosong atau tidak valid.
+    """
+    if not val:
+        return None
+    time_str, is_empty, err = parse_time_value(val)
+    if is_empty or err or not time_str:
+        return None
+    # Ambil HH:MM
+    parts = time_str.split(":")
+    return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
+
+
+def time_to_minutes(val: Union[str, time, datetime, None]) -> Optional[int]:
+    """
+    Mengonversi representasi waktu ke total menit dari 00:00 (0 - 1439).
+    Contoh: "08:15" -> 495, "16:30" -> 990.
+    Mengembalikan None jika waktu tidak valid atau kosong.
+    """
+    if val is None:
+        return None
+    time_str, is_empty, err = parse_time_value(val)
+    if is_empty or err or not time_str:
         return None
     try:
-        parts = formatted_str.split(":")
-        return time(int(parts[0]), int(parts[1]), int(parts[2]))
+        parts = time_str.split(":")
+        h = int(parts[0])
+        m = int(parts[1])
+        return h * 60 + m
     except Exception:
         return None
-

@@ -69,46 +69,55 @@ def run_phase4_migrations(engine):
 def run_phase5_migrations(engine):
     """
     Menjalankan migrasi DDL untuk Tahap 5:
-    1. Memastikan tabel attendance_deductions tersedia dengan kolom integer Rupiah dan unique constraint.
-    2. Memastikan indeks pencarian cepat terpasang.
+    1. Memastikan tabel attendance_deductions dan attendance_deduction_items tersedia.
+    2. Membuat indeks komposit untuk optimasi performa rekap bulanan dan integritas data.
     """
     with engine.connect() as conn:
         try:
-            # Periksa keberadaan tabel attendance_deductions
-            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='attendance_deductions'"))
-            table_exists = result.fetchone() is not None
+            # 1. Buat tabel attendance_deductions jika belum ada
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS attendance_deductions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    attendance_daily_id INTEGER NOT NULL UNIQUE,
+                    employee_id INTEGER NOT NULL,
+                    attendance_date DATE NOT NULL,
+                    late_minutes INTEGER NOT NULL DEFAULT 0,
+                    early_leave_minutes INTEGER NOT NULL DEFAULT 0,
+                    deduction_late INTEGER NOT NULL DEFAULT 0,
+                    deduction_early_leave INTEGER NOT NULL DEFAULT 0,
+                    deduction_missing_check_in INTEGER NOT NULL DEFAULT 0,
+                    deduction_missing_check_out INTEGER NOT NULL DEFAULT 0,
+                    total_deduction INTEGER NOT NULL DEFAULT 0,
+                    calculation_version VARCHAR(50) NOT NULL DEFAULT '1.0.0',
+                    calculated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    calculated_by VARCHAR(100) DEFAULT 'SYSTEM',
+                    notes TEXT,
+                    FOREIGN KEY (attendance_daily_id) REFERENCES attendance_daily (id) ON DELETE CASCADE,
+                    FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE,
+                    UNIQUE (employee_id, attendance_date)
+                )
+            """))
 
-            if not table_exists:
-                logger.info("Membuat tabel attendance_deductions untuk Tahap 5...")
-                conn.execute(text("""
-                    CREATE TABLE IF NOT EXISTS attendance_deductions (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        attendance_daily_id INTEGER NOT NULL UNIQUE,
-                        employee_id INTEGER NOT NULL,
-                        attendance_date DATE NOT NULL,
-                        late_minutes INTEGER NOT NULL DEFAULT 0,
-                        early_leave_minutes INTEGER NOT NULL DEFAULT 0,
-                        deduction_late INTEGER NOT NULL DEFAULT 0,
-                        deduction_early_leave INTEGER NOT NULL DEFAULT 0,
-                        deduction_missing_check_in INTEGER NOT NULL DEFAULT 0,
-                        deduction_missing_check_out INTEGER NOT NULL DEFAULT 0,
-                        total_deduction INTEGER NOT NULL DEFAULT 0,
-                        calculation_version VARCHAR(50) NOT NULL DEFAULT '1.0.0',
-                        calculated_at DATETIME NOT NULL,
-                        calculated_by VARCHAR(100),
-                        notes TEXT,
-                        CONSTRAINT uq_deduction_daily_id UNIQUE (attendance_daily_id),
-                        CONSTRAINT uq_deduction_emp_date UNIQUE (employee_id, attendance_date),
-                        FOREIGN KEY (attendance_daily_id) REFERENCES attendance_daily (id) ON DELETE CASCADE,
-                        FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE
-                    )
-                """))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_deduction_emp_date ON attendance_deductions (employee_id, attendance_date)"))
-                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_deduction_date ON attendance_deductions (attendance_date)"))
-                conn.commit()
-                logger.info("Tabel attendance_deductions berhasil dibuat.")
-            else:
-                logger.info("Tabel attendance_deductions sudah ada.")
+            # 2. Buat tabel attendance_deduction_items jika belum ada
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS attendance_deduction_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    attendance_deduction_id INTEGER NOT NULL,
+                    deduction_type VARCHAR(50) NOT NULL,
+                    description VARCHAR(255) NOT NULL,
+                    amount INTEGER NOT NULL DEFAULT 0,
+                    calculation_reference VARCHAR(255),
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (attendance_deduction_id) REFERENCES attendance_deductions (id) ON DELETE CASCADE
+                )
+            """))
+
+            # 3. Indeks pendukung performa rekap dan pelaporan
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_deduction_emp_date ON attendance_deductions (employee_id, attendance_date)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_deduction_total ON attendance_deductions (total_deduction)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_deduction_item_type ON attendance_deduction_items (deduction_type)"))
+
+            conn.commit()
+            logger.info("Migrasi skema Tahap 5 (attendance_deductions & attendance_deduction_items) berhasil.")
         except Exception as e:
-            logger.warning(f"Catatan migrasi attendance_deductions: {e}")
-
+            logger.warning(f"Catatan migrasi Tahap 5: {e}")

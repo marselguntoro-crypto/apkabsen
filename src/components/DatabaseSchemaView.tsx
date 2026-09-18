@@ -113,6 +113,37 @@ export default function DatabaseSchemaView() {
       ],
     },
     {
+      name: 'attendance_deductions',
+      description: 'Rekap kalkulasi nominal potongan presensi per karyawan per hari kerja (Tahap 5)',
+      columns: [
+        { name: 'id', type: 'INTEGER', isPk: true, note: 'Auto Increment' },
+        { name: 'employee_id', type: 'INTEGER', isFk: true, fkRef: 'employees.id', note: 'Relasi Pegawai' },
+        { name: 'attendance_daily_id', type: 'INTEGER', isFk: true, fkRef: 'attendance_daily.id', note: 'Relasi Presensi Harian' },
+        { name: 'attendance_date', type: 'DATE', note: 'Tanggal Transaksi' },
+        { name: 'terlambat_menit', type: 'INTEGER', note: 'Durasi Terlambat (Menit)' },
+        { name: 'pulang_cepat_menit', type: 'INTEGER', note: 'Durasi Pulang Cepat (Menit)' },
+        { name: 'deduction_late', type: 'INTEGER', note: 'Potongan Terlambat (Rp7.500 / Rp10.000)' },
+        { name: 'deduction_early_leave', type: 'INTEGER', note: 'Potongan Pulang Cepat (Rp10.000)' },
+        { name: 'deduction_missing_check_in', type: 'INTEGER', note: 'Potongan Tdk Scan Masuk (Rp10.000)' },
+        { name: 'deduction_missing_check_out', type: 'INTEGER', note: 'Potongan Tdk Scan Pulang (Rp10.000)' },
+        { name: 'total_deduction', type: 'INTEGER', note: 'Total Potongan Hari Ini (Integer Rupiah)' },
+        { name: 'calculation_status', type: 'VARCHAR(20)', note: 'CALCULATED / OVERRIDDEN' },
+        { name: 'created_at', type: 'DATETIME', note: 'CURRENT_TIMESTAMP' },
+      ],
+    },
+    {
+      name: 'attendance_deduction_items',
+      description: 'Rincian atomik komponen denda pelanggaran (alasan, menit, nominal, rule)',
+      columns: [
+        { name: 'id', type: 'INTEGER', isPk: true, note: 'Auto Increment' },
+        { name: 'deduction_id', type: 'INTEGER', isFk: true, fkRef: 'attendance_deductions.id', note: 'ON DELETE CASCADE' },
+        { name: 'violation_type', type: 'VARCHAR(50)', note: 'LATE, EARLY_LEAVE, MISSING_IN, MISSING_OUT' },
+        { name: 'minutes', type: 'INTEGER', note: 'Menit Pelanggaran' },
+        { name: 'amount', type: 'INTEGER', note: 'Nominal Rupiah Komponen' },
+        { name: 'rule_applied', type: 'VARCHAR(100)', note: 'Referensi Parameter Pengaturan' },
+      ],
+    },
+    {
       name: 'audit_logs',
       description: 'Catatan audit jejak aktivitas sistem dan perubahan data',
       columns: [
@@ -140,7 +171,7 @@ export default function DatabaseSchemaView() {
         </div>
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-full flex items-center gap-1">
-            <ShieldCheck className="w-3.5 h-3.5" /> 8 Tabel Terdefinisi
+            <ShieldCheck className="w-3.5 h-3.5" /> 10 Tabel Terdefinisi (Tahap 1 - 5)
           </span>
         </div>
       </div>

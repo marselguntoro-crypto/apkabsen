@@ -14,6 +14,7 @@ from database.models import (
     EmployeeStatus,
     AttendanceDaily,
     AttendanceStatus,
+    AttendanceDeduction,
     WorkCalendar,
     CalendarStatus,
 )
@@ -41,7 +42,11 @@ class DashboardService:
             "total_alfa": 0,
             "total_terlambat": 0,
             "total_pulang_cepat": 0,
-            "total_potongan": 0.0,
+            "total_potongan": 0,
+            "nominal_terlambat": 0,
+            "nominal_pulang_cepat": 0,
+            "nominal_tidak_absen_masuk": 0,
+            "nominal_tidak_absen_pulang": 0,
             "formatted_potongan": "Rp 0",
         }
 
@@ -69,7 +74,6 @@ class DashboardService:
                 if calendar_work_days > 0:
                     stats["total_hari_kerja"] = calendar_work_days
                 else:
-                    # Fallback ke konfigurasi target hari kerja bulanan
                     target_str = SettingsService.get("target_hari_kerja_bulanan", "18")
                     stats["total_hari_kerja"] = int(target_str) if target_str.isdigit() else 18
 
@@ -79,7 +83,6 @@ class DashboardService:
                     extract("year", AttendanceDaily.attendance_date) == year,
                 )
 
-                # Total Hadir (Memiliki scan masuk atau hadir lengkap)
                 stats["total_hadir"] = (
                     daily_query.filter(
                         (AttendanceDaily.attendance_status == AttendanceStatus.HADIR_LENGKAP.value)
@@ -88,7 +91,6 @@ class DashboardService:
                     ).count()
                 )
 
-                # Total Alfa (Tidak absen / tidak hadir)
                 stats["total_alfa"] = (
                     daily_query.filter(
                         (AttendanceDaily.attendance_status == AttendanceStatus.TIDAK_ABSEN.value)
@@ -96,28 +98,49 @@ class DashboardService:
                     ).count()
                 )
 
-                # Terlambat
                 stats["total_terlambat"] = (
                     daily_query.filter(AttendanceDaily.terlambat_menit > 0).count()
                 )
 
-                # Pulang Cepat
                 stats["total_pulang_cepat"] = (
                     daily_query.filter(AttendanceDaily.pulang_cepat_menit > 0).count()
                 )
 
-                # Total Potongan Rupiah
-                total_potongan = (
-                    session.query(func.sum(AttendanceDaily.total_potongan))
-                    .filter(
-                        extract("month", AttendanceDaily.tanggal) == month,
-                        extract("year", AttendanceDaily.tanggal) == year,
+                # 4. Total Potongan Rupiah dari AttendanceDeduction (Presisi Integer)
+                ded_stats = (
+                    session.query(
+                        func.sum(AttendanceDeduction.total_deduction).label("sum_total"),
+                        func.sum(AttendanceDeduction.deduction_late).label("sum_late"),
+                        func.sum(AttendanceDeduction.deduction_early_leave).label("sum_early"),
+                        func.sum(AttendanceDeduction.deduction_missing_check_in).label("sum_miss_in"),
+                        func.sum(AttendanceDeduction.deduction_missing_check_out).label("sum_miss_out"),
                     )
-                    .scalar()
-                ) or 0.0
+                    .filter(
+                        extract("month", AttendanceDeduction.attendance_date) == month,
+                        extract("year", AttendanceDeduction.attendance_date) == year,
+                    )
+                    .first()
+                )
 
-                stats["total_potongan"] = float(total_potongan)
-                stats["formatted_potongan"] = DashboardService.format_rupiah(float(total_potongan))
+                if ded_stats and ded_stats.sum_total is not None:
+                    stats["total_potongan"] = int(ded_stats.sum_total)
+                    stats["nominal_terlambat"] = int(ded_stats.sum_late or 0)
+                    stats["nominal_pulang_cepat"] = int(ded_stats.sum_early or 0)
+                    stats["nominal_tidak_absen_masuk"] = int(ded_stats.sum_miss_in or 0)
+                    stats["nominal_tidak_absen_pulang"] = int(ded_stats.sum_miss_out or 0)
+                else:
+                    # Fallback ke AttendanceDaily
+                    total_pot = (
+                        session.query(func.sum(AttendanceDaily.total_potongan))
+                        .filter(
+                            extract("month", AttendanceDaily.attendance_date) == month,
+                            extract("year", AttendanceDaily.attendance_date) == year,
+                        )
+                        .scalar()
+                    ) or 0
+                    stats["total_potongan"] = int(total_pot)
+
+                stats["formatted_potongan"] = DashboardService.format_rupiah(stats["total_potongan"])
 
         except Exception as e:
             logger.error(f"Gagal mengambil statistik dashboard periode {month}/{year}: {e}")
