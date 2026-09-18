@@ -238,8 +238,15 @@ class AttendanceDailyService:
                             has_conflict = True  # Beberapa scan pulang terdeteksi
 
                     # Format ke string HH:MM untuk database String(10)
-                    actual_in_str = actual_in.strftime("%H:%M") if actual_in else None
-                    actual_out_str = actual_out.strftime("%H:%M") if actual_out else None
+                    if actual_in:
+                        actual_in_str = actual_in if isinstance(actual_in, str) else actual_in.strftime("%H:%M")
+                    else:
+                        actual_in_str = None
+
+                    if actual_out:
+                        actual_out_str = actual_out if isinstance(actual_out, str) else actual_out.strftime("%H:%M")
+                    else:
+                        actual_out_str = None
 
                     # 3. Status Kehadiran
                     check_in_st = CheckScanStatus.ADA if actual_in else CheckScanStatus.TIDAK_ADA

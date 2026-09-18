@@ -6,7 +6,10 @@ dan nilai default sistem.
 import os
 import sys
 from pathlib import Path
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
 
 # Deteksi root path aplikasi (mendukung eksekusi script biasa dan bundle PyInstaller)
 if getattr(sys, "frozen", False):
@@ -18,7 +21,7 @@ else:
 
 # Load file .env jika ada
 env_path = BASE_DIR / ".env"
-if env_path.exists():
+if env_path.exists() and load_dotenv:
     load_dotenv(dotenv_path=env_path)
 
 # Identitas Aplikasi
@@ -63,6 +66,7 @@ DB_DIR = DATA_DIR / "database"
 BACKUP_DIR = DATA_DIR / "backups"
 LOGS_DIR = DATA_DIR / "logs"
 EXPORTS_DIR = DATA_DIR / "exports"
+EXPORT_DIR = EXPORTS_DIR  # Alias kompatibilitas untuk modul export
 CONFIG_DIR = DATA_DIR / "config"
 ASSETS_DIR = BASE_DIR / "assets"
 

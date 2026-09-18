@@ -10,11 +10,12 @@ import os
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
-from config.settings import EXPORT_DIR
+from config.settings import EXPORTS_DIR
 from services.deduction_calculation_service import DeductionCalculationService
 from utils.logger import get_logger
 
 logger = get_logger("ExportService")
+EXPORT_DIR = str(EXPORTS_DIR)
 
 
 class ExportService:

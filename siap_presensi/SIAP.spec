@@ -15,8 +15,8 @@ from pathlib import Path
 
 block_cipher = None
 
-# Direktori proyek root
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+# Direktori proyek root (SPECPATH disediakan otomatis oleh PyInstaller saat membaca .spec)
+BASE_DIR = os.path.abspath(SPECPATH if 'SPECPATH' in globals() else os.getcwd())
 
 # Data statis yang wajib disertakan
 added_datas = [
@@ -45,6 +45,69 @@ hidden_imports = [
     'reportlab.platypus',
     'reportlab.pdfgen',
     'dotenv',
+    # Internal services modules
+    'services',
+    'services.attendance_daily_service',
+    'services.attendance_raw_service',
+    'services.attendance_import_service',
+    'services.employee_service',
+    'services.employee_import_service',
+    'services.calendar_service',
+    'services.deduction_calculation_service',
+    'services.export_service',
+    'services.import_validation_service',
+    'services.auth_service',
+    'services.settings_service',
+    'services.dashboard_service',
+    'services.backup_service',
+    # Internal UI modules and dialogs
+    'ui',
+    'ui.main_window',
+    'ui.login_window',
+    'ui.dashboard_page',
+    'ui.attendance_hub_page',
+    'ui.raw_attendance_page',
+    'ui.daily_attendance_page',
+    'ui.employees_page',
+    'ui.calendar_page',
+    'ui.deduction_calculation_page',
+    'ui.deduction_page',
+    'ui.reports_hub_page',
+    'ui.settings_page',
+    'ui.backup_page',
+    'ui.import_attendance_page',
+    'ui.import_history_page',
+    'ui.import_module_page',
+    'ui.dialogs',
+    'ui.dialogs.generate_daily_dialog',
+    'ui.dialogs.import_result_dialog',
+    'ui.dialogs.excel_preview_dialog',
+    'ui.dialogs.edit_calendar_dialog',
+    'ui.dialogs.worksheet_selection_dialog',
+    'ui.dialogs.first_run_dialog',
+    'ui.dialogs.about_dialog',
+    'ui.dialogs.deduction_detail_dialog',
+    'ui.widgets',
+    'ui.widgets.sidebar',
+    'ui.widgets.stat_card',
+    'ui.widgets.employee_import_dialog',
+    'ui.widgets.employee_form_dialog',
+    # Internal utils and database
+    'utils',
+    'utils.date_parser',
+    'utils.time_parser',
+    'utils.logger',
+    'utils.validators',
+    'utils.excel_reader',
+    'utils.duplicate_detector',
+    'database',
+    'database.models',
+    'database.connection',
+    'database.base',
+    'database.initializer',
+    'database.seed',
+    'config',
+    'config.settings',
 ]
 
 # Modul yang dieksklusi untuk merampingkan ukuran bundle
